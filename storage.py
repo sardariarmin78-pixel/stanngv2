@@ -1,36 +1,55 @@
 """
 StanNG - Persistent JSON storage layer.
 Single-file, dependency-free storage engine (no external DB required).
-Thread/async safe via an in-process lock + atomic file writes.
+Async-safe via an in-process lock + atomic file writes.
+
+Writes are debounced: hot-path mutations (traffic accounting, request counters)
+mark the store dirty and a background flush persists them, while anything the
+admin does is written through immediately. The file itself is serialised on the
+event loop but written from a worker thread, so a large db.json never stalls
+the proxy.
 """
+import asyncio
+import glob
+import hashlib
 import json
 import os
 import secrets
-import hashlib
 import time
-import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 DATA_DIR = os.environ.get("STANNG_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 DB_PATH = os.path.join(DATA_DIR, "db.json")
 
+SCHEMA_VERSION = 4  # v4: login_attempts pruning + sessions_epoch
+PBKDF2_ITERATIONS = 260_000
+
+# Drop lockout records this old — the table used to grow forever, one entry per
+# distinct client IP that ever failed a login, and every entry was rewritten to
+# disk on each save.
+LOGIN_ATTEMPT_TTL = 24 * 3600
+
 _lock = asyncio.Lock()
 
 DEFAULT_DB: Dict[str, Any] = {
-    "schema_version": 3,  # v3: removed "addresses" (clean-IP feature)
+    "schema_version": SCHEMA_VERSION,
     "admin": None,          # {"username": str, "password_hash": str, "salt": str, "created_at": ts}
     "secret_key": None,     # generated on first run, used to sign session cookies
+    "sessions_epoch": 0,    # bumped to invalidate every issued session cookie
     "settings": {
         "lang": "fa",
         "theme": "dark",
         "public_domain": "",         # optional override; else derived from request Host header
         "keep_alive": True,
-        "ota_repo": "your-username/StanNG",
+        "ota_repo": "",
         # NOTE: app_version is intentionally NOT stored here. It must always
         # reflect the code actually running on disk (main.py's APP_VERSION),
         # never a stale value frozen into db.json from an earlier install —
         # that mismatch used to make the dashboard show the wrong "Current"
         # version after every update.
+        # ---- branding (env vars provide the defaults; panel can override) ----
+        "panel_name": "",
+        "telegram_contact": "",
         # ---- advanced config defaults (applied to newly generated VLESS links) ----
         "default_fingerprint": "chrome",     # chrome | ios | firefox | edge | random
         "default_alpn": "http/1.1",          # http/1.1 | h2,http/1.1 | h3,h2,http/1.1
@@ -39,51 +58,98 @@ DEFAULT_DB: Dict[str, Any] = {
         "fragment_packets": "tlshello",
         "fragment_length": "10-30",
         "fragment_interval": "10-20",
+        # ---- relay safety ----
+        # Off by default: a proxied client reaching 127.0.0.1 or the cloud
+        # metadata endpoint (169.254.169.254) can pivot into the host itself.
+        "allow_private_destinations": False,
+        "idle_timeout_seconds": 600,
     },
     "inbounds": [],       # list of inbound/user dicts
-    # "addresses" removed – clean-IP feature no longer supported
     "stats": {
         "started_at": time.time(),
         "total_up": 0,
         "total_down": 0,
         "hourly": []       # [{"t": ts, "up": n, "down": n}]
     },
-    "login_attempts": {}  # ip -> {"count": n, "locked_until": ts}
+    "login_attempts": {}  # ip -> {"count": n, "locked_until": ts, "seen": ts}
 }
 
 
 def _atomic_write(path: str, data: str):
+    """Write then rename, so a crash mid-write cannot truncate the live db."""
     tmp_path = f"{path}.tmp-{secrets.token_hex(4)}"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        # Don't leave orphaned .tmp-* files behind on failure.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    # Persist the rename itself; without this the new file can survive a power
+    # cut while the directory entry still points at the old one.
+    try:
+        dir_fd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except (OSError, AttributeError):
+        pass  # not supported on Windows; os.replace is atomic there regardless
 
 
 def _ensure_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
-def load_db() -> Dict[str, Any]:
-    _ensure_dir()
-    if not os.path.exists(DB_PATH):
-        db = json.loads(json.dumps(DEFAULT_DB))
-        db["secret_key"] = secrets.token_hex(32)
-        _atomic_write(DB_PATH, json.dumps(db, ensure_ascii=False, indent=2))
-        return db
-    try:
-        with open(DB_PATH, "r", encoding="utf-8") as f:
-            db = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        db = json.loads(json.dumps(DEFAULT_DB))
-        db["secret_key"] = secrets.token_hex(32)
-    # merge defaults for forward-compat (new fields added over time)
+def _cleanup_temp_files():
+    for stale in glob.glob(f"{DB_PATH}.tmp-*"):
+        try:
+            os.unlink(stale)
+        except OSError:
+            pass
+
+
+def prune_login_attempts(db: Dict[str, Any]) -> bool:
+    """Drop expired lockout records. Returns True if anything was removed."""
+    la = db.get("login_attempts")
+    if not isinstance(la, dict) or not la:
+        return False
+    now = time.time()
+    stale = [
+        ip for ip, rec in la.items()
+        if not isinstance(rec, dict)
+        or (rec.get("locked_until", 0) < now and now - rec.get("seen", 0) > LOGIN_ATTEMPT_TTL)
+    ]
+    for ip in stale:
+        la.pop(ip, None)
+    return bool(stale)
+
+
+def _fresh_db() -> Dict[str, Any]:
+    db = json.loads(json.dumps(DEFAULT_DB))
+    db["secret_key"] = secrets.token_hex(32)
+    db["stats"]["started_at"] = time.time()
+    return db
+
+
+def normalize_db(db: Dict[str, Any]) -> bool:
+    """Fill in missing keys, migrate old shapes, drop stale records.
+
+    Shared by load_db and by backup restore, so a hand-edited or older backup
+    can never install a db that is missing the keys the app assumes exist.
+    """
     changed = False
     for k, v in DEFAULT_DB.items():
         if k not in db:
-            db[k] = v
+            db[k] = json.loads(json.dumps(v))
             changed = True
+
     if isinstance(db.get("settings"), dict):
         for k, v in DEFAULT_DB["settings"].items():
             if k not in db["settings"]:
@@ -94,27 +160,87 @@ def load_db() -> Dict[str, Any]:
         if "app_version" in db["settings"]:
             del db["settings"]["app_version"]
             changed = True
+        # The old default was a placeholder that 404s against the GitHub API on
+        # every update check; treat it as "not configured".
+        if db["settings"].get("ota_repo") == "your-username/StanNG":
+            db["settings"]["ota_repo"] = ""
+            changed = True
+    else:
+        db["settings"] = json.loads(json.dumps(DEFAULT_DB["settings"]))
+        changed = True
+
     if not db.get("secret_key"):
         db["secret_key"] = secrets.token_hex(32)
         changed = True
+    if not isinstance(db.get("inbounds"), list):
+        db["inbounds"] = []
+        changed = True
+    if not isinstance(db.get("stats"), dict):
+        db["stats"] = json.loads(json.dumps(DEFAULT_DB["stats"]))
+        changed = True
+    if not isinstance(db.get("login_attempts"), dict):
+        db["login_attempts"] = {}
+        changed = True
 
-    # ------------------- v3 migration: remove "addresses" (clean-IP) ----------------
+    # Repair inbound records so one bad row cannot break every listing.
+    kept = []
+    for ib in db["inbounds"]:
+        if not isinstance(ib, dict) or not ib.get("uid") or not ib.get("uuid"):
+            changed = True
+            continue
+        for field, default in (("used_up", 0), ("used_down", 0), ("request_count", 0),
+                               ("quota_gb", 0), ("max_connections", 0), ("max_requests", 0),
+                               ("expire_days", 0)):
+            if not isinstance(ib.get(field), (int, float)) or isinstance(ib.get(field), bool):
+                ib[field] = default
+                changed = True
+        if not isinstance(ib.get("name"), str):
+            ib["name"] = "User"
+            changed = True
+        if not isinstance(ib.get("expire_at"), (int, float)) or isinstance(ib.get("expire_at"), bool):
+            if ib.get("expire_at") is not None:
+                ib["expire_at"] = None
+                changed = True
+        kept.append(ib)
+    if len(kept) != len(db["inbounds"]):
+        db["inbounds"] = kept
+
+    # ------------------- v3 migration: remove "addresses" (clean-IP) ----------
     if "addresses" in db:
         del db["addresses"]
         changed = True
-        # Optionally update schema_version to 3 if still lower
-    if db.get("schema_version", 1) < 3:
-        db["schema_version"] = 3
+    if prune_login_attempts(db):
         changed = True
+    if db.get("schema_version", 1) != SCHEMA_VERSION:
+        db["schema_version"] = SCHEMA_VERSION
+        changed = True
+    return changed
 
-    if changed:
+
+def load_db() -> Dict[str, Any]:
+    _ensure_dir()
+    _cleanup_temp_files()
+    if not os.path.exists(DB_PATH):
+        db = _fresh_db()
+        _atomic_write(DB_PATH, json.dumps(db, ensure_ascii=False, indent=2))
+        return db
+    try:
+        with open(DB_PATH, "r", encoding="utf-8") as f:
+            db = json.load(f)
+        if not isinstance(db, dict):
+            raise ValueError("db.json is not an object")
+    except (json.JSONDecodeError, OSError, ValueError):
+        # Never silently discard a corrupt db — keep it aside so the admin can
+        # recover users manually instead of finding an empty panel.
+        try:
+            os.replace(DB_PATH, f"{DB_PATH}.corrupt-{int(time.time())}")
+        except OSError:
+            pass
+        db = _fresh_db()
+
+    if normalize_db(db):
         _atomic_write(DB_PATH, json.dumps(db, ensure_ascii=False, indent=2))
     return db
-
-
-def save_db(db: Dict[str, Any]):
-    _ensure_dir()
-    _atomic_write(DB_PATH, json.dumps(db, ensure_ascii=False, indent=2))
 
 
 class Store:
@@ -122,16 +248,53 @@ class Store:
 
     def __init__(self):
         self.db = load_db()
+        self._dirty = False
+        self._last_write = 0.0
 
     async def get(self) -> Dict[str, Any]:
-        async with _lock:
-            return self.db
+        return self.db
 
-    async def mutate(self, fn):
-        """fn(db) -> mutates db in place. Persists after."""
+    async def mutate(self, fn, persist: bool = True):
+        """Apply fn(db) under the lock.
+
+        persist=False marks the store dirty instead of writing, for hot-path
+        updates that a periodic flush can batch. If fn raises, nothing is
+        written and the exception propagates to the caller.
+        """
         async with _lock:
             fn(self.db)
-            save_db(self.db)
+            if persist:
+                await self._write_locked()
+            else:
+                self._dirty = True
+            return self.db
+
+    async def flush(self, force: bool = False) -> bool:
+        """Persist pending changes. Returns True if a write happened."""
+        async with _lock:
+            if not (self._dirty or force):
+                return False
+            await self._write_locked()
+            return True
+
+    async def _write_locked(self):
+        # Serialise on the loop (fast, and a consistent snapshot because no
+        # await happens mid-dump), then push the bytes to disk off-loop.
+        data = json.dumps(self.db, ensure_ascii=False, indent=2)
+        self._dirty = False
+        self._last_write = time.time()
+        await asyncio.to_thread(_atomic_write, DB_PATH, data)
+
+    def snapshot_json(self) -> str:
+        return json.dumps(self.db, ensure_ascii=False, indent=2)
+
+    async def replace(self, new_db: Dict[str, Any]):
+        """Swap in a restored backup and persist it immediately."""
+        async with _lock:
+            normalize_db(new_db)
+            self.db.clear()
+            self.db.update(new_db)
+            await self._write_locked()
             return self.db
 
     def get_sync(self) -> Dict[str, Any]:
@@ -143,12 +306,25 @@ store = Store()
 
 # ---------- password hashing (stdlib only, no extra deps) ----------
 
-def hash_password(password: str, salt: str = None) -> Dict[str, str]:
+def hash_password(password: str, salt: Optional[str] = None) -> Dict[str, str]:
     salt = salt or secrets.token_hex(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 260_000)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), PBKDF2_ITERATIONS)
     return {"hash": dk.hex(), "salt": salt}
 
 
 def verify_password(password: str, salt: str, expected_hash: str) -> bool:
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 260_000)
+    if not salt or not expected_hash:
+        return False
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), PBKDF2_ITERATIONS)
     return secrets.compare_digest(dk.hex(), expected_hash)
+
+
+# 260k PBKDF2 rounds take ~100-200ms. Run them in a worker thread: on the event
+# loop, a handful of login attempts would stall every proxied connection.
+
+async def hash_password_async(password: str, salt: Optional[str] = None) -> Dict[str, str]:
+    return await asyncio.to_thread(hash_password, password, salt)
+
+
+async def verify_password_async(password: str, salt: str, expected_hash: str) -> bool:
+    return await asyncio.to_thread(verify_password, password, salt, expected_hash)

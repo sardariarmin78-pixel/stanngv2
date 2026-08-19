@@ -22,7 +22,15 @@ const STANNG = (() => {
     try {
       const src = SFX[name];
       if (!src) return;
-      const a = new Audio(src);
+      // Decode each effect once and replay a lightweight clone, instead of
+      // constructing (and never releasing) a new Audio per click.
+      let base = audioCache[name];
+      if (!base) {
+        base = new Audio(src);
+        base.preload = 'auto';
+        audioCache[name] = base;
+      }
+      const a = base.cloneNode();
       a.volume = vol;
       a.play().catch(() => {});
     } catch (e) {}
@@ -93,7 +101,16 @@ const STANNG = (() => {
     const stack = ensureToastStack();
     const el = document.createElement('div');
     el.className = `toast ${type}`;
-    el.innerHTML = `<span class="toast-icon" style="color:var(--${type === 'success' ? 'emerald' : type === 'error' ? 'crimson' : 'azure'})">${ICONS[type] || ICONS.info}</span><span>${message}</span>`;
+    // The message can carry a server error detail or a user-supplied name, so
+    // it goes in as text. Building this string into innerHTML was an XSS.
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.style.color = `var(--${type === 'success' ? 'emerald' : type === 'error' ? 'crimson' : 'azure'})`;
+    icon.innerHTML = ICONS[type] || ICONS.info;
+    const text = document.createElement('span');
+    text.textContent = message == null ? '' : String(message);
+    el.appendChild(icon);
+    el.appendChild(text);
     stack.appendChild(el);
     if (type === 'success') playSfx('success');
     else if (type === 'error') playSfx('error');
@@ -182,6 +199,11 @@ const STANNG = (() => {
     el.classList.add('shake');
   }
 
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+  }
+
   function fmtBytes(bytes) {
     if (!bytes || bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -201,12 +223,45 @@ const STANNG = (() => {
     return parts.join(' ');
   }
 
+  function initLangThemeToggles(onChange) {
+    document.querySelectorAll('.lang-toggle button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        setLang(btn.dataset.lang);
+        playSfx('toggle', 0.3);
+        if (onChange) onChange();
+      });
+    });
+    const themeBtn = document.getElementById('themeToggle');
+    if (themeBtn) {
+      themeBtn.addEventListener('click', () => {
+        setTheme(getTheme() === 'dark' ? 'light' : 'dark');
+        playSfx('toggle', 0.3);
+        if (onChange) onChange();
+      });
+    }
+  }
+
+  function initPasswordToggles() {
+    document.querySelectorAll('[data-toggle-for]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const input = document.getElementById(btn.dataset.toggleFor);
+        if (!input) return;
+        const isPw = input.type === 'password';
+        input.type = isPw ? 'text' : 'password';
+        btn.innerHTML = isPw
+          ? '<svg width="18" height="18"><use href="#icon-eye-off"/></svg>'
+          : '<svg width="18" height="18"><use href="#icon-eye"/></svg>';
+      });
+    });
+  }
+
   return {
     playSfx, setSoundEnabled, isSoundEnabled,
+    initLangThemeToggles, initPasswordToggles,
     getTheme, setTheme, applyStoredTheme,
     getLang, setLang, t, translatePage,
     toast, api, initRipples, attachRipple, initSparkles,
-    setLoading, shake, fmtBytes, fmtDuration,
+    setLoading, shake, fmtBytes, fmtDuration, escapeHtml,
   };
 })();
 

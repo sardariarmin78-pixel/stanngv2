@@ -1,7 +1,8 @@
 /* ===========================================================
-   StanNG — bilingual dictionary (fa / en) v1.4.1
-   Removed: Clean IP, Non‑TLS
-   Added: Info Configs descriptions, JSON subscription link
+   StanNG — bilingual dictionary (fa / en) v1.5.0
+   Removed: Clean IP, Non-TLS, dummy "info configs"
+   Added: renew, backup/restore, branding, relay safety,
+          per-limit status reasons
    =========================================================== */
 window.I18N = {
   // ---- brand / generic ----
@@ -111,7 +112,7 @@ window.I18N = {
   inb_link_tls: { fa: 'کانفیگ TLS (پورت ۴۴۳)', en: 'TLS Config (port 443)' },
   // حذف inb_link_nontls, inb_link_addresses
   inb_sub_note: {
-    fa: 'لینک اشتراک شامل دو کانفیگ نمایشی (وضعیت مصرف و پیام رایگان) به‌همراه کانفیگ TLS است.',
+    fa: 'حجم و تاریخ انقضا از طریق هدر استاندارد Subscription-Userinfo داخل کلاینت نمایش داده می‌شود.',
     en: 'The subscription link includes two display-only configs (usage status and free message) plus the TLS config.'
   },
   inb_info_configs_note: {
@@ -182,4 +183,42 @@ window.I18N = {
   copy_link: { fa: 'کپی لینک', en: 'Copy link' },
   refresh: { fa: 'بروزرسانی', en: 'Refresh' },
   search_placeholder: { fa: 'جستجوی کاربر...', en: 'Search users...' },
+  // ---- v1.5.0: renew ----
+  inb_renew: { fa: 'تمدید اشتراک', en: 'Renew' },
+  inb_renew_hint: { fa: 'روزها به تاریخ انقضای فعلی اضافه می‌شود. اگر اشتراک منقضی شده باشد، از همین حالا حساب می‌شود.', en: 'Days are added to the current expiry. If it already expired, counting starts from now.' },
+  inb_renew_days: { fa: 'تعداد روز', en: 'Days' },
+  inb_renew_reset: { fa: 'ریست کردن حجم مصرفی', en: 'Also reset usage' },
+  inb_renewed: { fa: 'اشتراک تمدید شد', en: 'Subscription renewed' },
+  inb_invalid_number: { fa: 'مقدار عددی نامعتبر است', en: 'Invalid number' },
+  inb_enabled: { fa: 'فعال', en: 'Enabled' },
+  inb_active_ips: { fa: 'IP های متصل در این لحظه', en: 'Currently connected IPs' },
+
+  // ---- v1.5.0: limit reasons ----
+  status_quota_over: { fa: 'حجم تمام شده', en: 'Data limit reached' },
+  status_requests_over: { fa: 'سقف درخواست پر شده', en: 'Request limit reached' },
+  inb_disabled_manual: { fa: 'غیرفعال شده', en: 'Disabled' },
+
+  // ---- v1.5.0: branding ----
+  settings_brand_title: { fa: 'برندینگ', en: 'Branding' },
+  settings_brand_hint: { fa: 'نام پنل و لینک پشتیبانی در تمام صفحات نمایش داده می‌شود. خالی بگذارید تا مقدار پیش‌فرض سرور استفاده شود.', en: 'Panel name and support link appear on every page. Leave blank to use the server default.' },
+  settings_panel_name: { fa: 'نام پنل', en: 'Panel name' },
+  settings_telegram: { fa: 'لینک پشتیبانی تلگرام', en: 'Telegram support link' },
+
+  // ---- v1.5.0: relay safety ----
+  settings_relay_title: { fa: 'امنیت رله', en: 'Relay safety' },
+  settings_allow_private: { fa: 'اجازه اتصال به شبکه داخلی', en: 'Allow private-network destinations' },
+  settings_allow_private_hint: { fa: 'خاموش بماند. اگر روشن شود، کاربران می‌توانند به 127.0.0.1 و سرویس متادیتای سرور (169.254.169.254) دسترسی پیدا کنند.', en: 'Keep this off. When on, users can reach 127.0.0.1 and the host metadata service (169.254.169.254).' },
+  settings_idle_timeout: { fa: 'قطع اتصال بی‌استفاده (ثانیه)', en: 'Idle disconnect (seconds)' },
+  settings_idle_timeout_hint: { fa: '۰ یعنی هرگز. اتصال‌های مرده سهمیه «اتصال همزمان» کاربر را اشغال می‌کنند.', en: '0 means never. Otherwise dead connections keep occupying concurrent-connection slots.' },
+
+  // ---- v1.5.0: backup ----
+  settings_backup_title: { fa: 'پشتیبان‌گیری', en: 'Backup' },
+  settings_backup_hint: { fa: 'فایل پشتیبان شامل کاربران، تنظیمات و هش رمز ادمین است. آن را جای امنی نگه دارید.', en: 'The backup file contains users, settings and the admin password hash. Store it somewhere safe.' },
+  settings_backup_download: { fa: 'دانلود فایل پشتیبان', en: 'Download backup' },
+  settings_restore: { fa: 'بازیابی از فایل', en: 'Restore from file' },
+  settings_restore_hint: { fa: 'بازیابی، تمام داده‌های فعلی را جایگزین می‌کند و شما را از پنل خارج می‌کند.', en: 'Restoring replaces all current data and signs you out.' },
+  settings_restore_confirm: { fa: 'تمام کاربران و تنظیمات فعلی با محتوای این فایل جایگزین می‌شود. ادامه می‌دهید؟', en: 'All current users and settings will be replaced by this file. Continue?' },
+  settings_restored: { fa: 'بازیابی انجام شد. دوباره وارد شوید.', en: 'Restore complete. Please sign in again.' },
+  settings_logout_all: { fa: 'خروج از همه دستگاه‌ها', en: 'Sign out everywhere' },
+  settings_logout_all_confirm: { fa: 'تمام نشست‌های فعال روی همه دستگاه‌ها باطل می‌شود. ادامه می‌دهید؟', en: 'Every active session on every device will be invalidated. Continue?' },
 };
