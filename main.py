@@ -27,7 +27,7 @@ import psutil
 import qrcode
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import (
-    HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+    HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -35,6 +35,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 import cluster
 import notify
+import subscription
 import totp
 from colo_map import describe_colo
 from storage import (
@@ -44,7 +45,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 
 def _env_str(name: str, default: str) -> str:
@@ -1622,6 +1623,8 @@ def build_configs(request: Request, db, ib) -> list:
         remark = f"{panel}-{ib['name']}"
         return [{
             "name": "", "remark": remark, "address": default_host, "port": 443,
+            "uuid": ib["uuid"], "path": path, "sni": sni, "host": default_host,
+            "fp": default_fp, "alpn": default_alpn,
             "link": _vless_link(ib, default_host, 443, path, sni,
                                 default_fp, default_alpn, settings, remark),
         }]
@@ -1645,7 +1648,10 @@ def build_configs(request: Request, db, ib) -> list:
                            settings, remark, host_header=host_header)
         out.append({
             "id": ep.get("id"), "name": label, "remark": remark,
-            "address": address, "port": port, "link": link,
+            "address": address, "port": port,
+            "uuid": ib["uuid"], "path": path, "sni": sni, "host": host_header,
+            "fp": fp, "alpn": alpn,
+            "link": link,
         })
     return out
 
@@ -1866,23 +1872,34 @@ async def api_test_endpoint(endpoint_id: str, user: str = Depends(require_auth))
 
 # ------------------------------------------------------------------ subscriptions
 @app.get("/sub/{uid}")
-async def sub_plain(uid: str, request: Request):
-    """Plain-text VLESS links, as v2rayNG and friends expect."""
+async def sub_plain(uid: str, request: Request, format: Optional[str] = None):
+    """Subscription in whichever dialect the client speaks.
+
+    Plain text stays the default and the fallback. Clash and sing-box get a
+    latency-tested group across every entry point, so the client moves off a
+    blocked route on its own instead of the user guessing.
+    """
     db = await store.get()
     ib = inbound_by_uid(db, uid)
     if not ib:
         raise HTTPException(404, "not-found")
+
     configs = build_configs(request, db, ib)
+    fmt = subscription.detect_format(format, request.headers.get("user-agent", ""))
+    profile = f"{brand(db)['panel_name']}-{ib['name']}"
+    body = subscription.render(fmt, configs, profile)
+
+    ext = {"clash": "yaml", "singbox": "json"}.get(fmt, "txt")
     headers = {
         "Subscription-Userinfo": subscription_userinfo(ib),
         "Profile-Update-Interval": "12",
-        "Profile-Title": header_safe_title(f"{brand(db)['panel_name']}-{ib['name']}"),
-        "Content-Disposition": f'inline; filename="{uid}.txt"',
+        "Profile-Title": header_safe_title(profile),
+        "Content-Disposition": f'inline; filename="{uid}.{ext}"',
         "Cache-Control": "no-store",
+        # Lets a client (and a human debugging one) see which dialect it got.
+        "X-Subscription-Format": fmt,
     }
-    # One line per entry point; clients list them as separate servers and the
-    # user picks (or auto-selects) whichever route is working for their ISP.
-    return PlainTextResponse("\n".join(c["link"] for c in configs), headers=headers)
+    return Response(body, media_type=subscription.CONTENT_TYPES[fmt], headers=headers)
 
 
 @app.get("/sub/{uid}/json")
