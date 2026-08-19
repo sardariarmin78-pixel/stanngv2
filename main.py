@@ -2,12 +2,13 @@
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
 
-Version 1.5.0
+Version 1.6.0
   * live quota/expiry enforcement (limits used to apply only at connect time)
   * SSRF-guarded relay, working UDP, idle-timeout on dead sessions
   * batched disk writes, non-blocking stats, cached edge lookup
   * standard Subscription-Userinfo header for v2rayNG/Clash/Nekobox
-  * configurable branding, backup/restore, one-click renew
+  * plans + bulk provisioning, per-user traffic history
+  * TOTP two-factor auth, Telegram alerts, configurable branding
 """
 import asyncio
 import io
@@ -31,14 +32,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+import notify
+import totp
 from colo_map import describe_colo
 from storage import (
-    normalize_db, prune_login_attempts, store, hash_password_async, verify_password_async,
+    MAX_LOGIN_LOG, normalize_db, prune_login_attempts, store,
+    hash_password_async, verify_password_async,
 )
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 
 
 def _env_str(name: str, default: str) -> str:
@@ -71,6 +75,8 @@ FLUSH_INTERVAL = 5          # seconds: fold pending traffic into the in-memory d
 DISK_FLUSH_INTERVAL = 15    # seconds: persist the db if anything changed
 ENFORCE_INTERVAL = 10       # seconds: kick sessions that ran past their limits
 COLO_CACHE_TTL = 3600       # seconds: the edge datacentre does not move often
+NOTIFY_INTERVAL = 300       # seconds: scan for quota/expiry alerts
+MAX_BULK_CREATE = 200       # users creatable in one bulk request
 
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
@@ -95,6 +101,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_disk_flush_loop()),
         asyncio.create_task(_enforcement_loop()),
         asyncio.create_task(_keep_alive_loop()),
+        asyncio.create_task(_notify_loop()),
     ]
     try:
         yield
@@ -361,13 +368,28 @@ async def _fold_pending_traffic():
     runtime["pending_traffic"] = {}
     runtime["pending_requests"] = {}
 
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+
     def _apply(db):
+        retention = _history_days(db)
         total_up = total_down = 0
         for uid, delta in traffic.items():
             ib = inbound_by_uid(db, uid)
             if ib:
-                ib["used_up"] = ib.get("used_up", 0) + delta.get("up", 0)
-                ib["used_down"] = ib.get("used_down", 0) + delta.get("down", 0)
+                up, down = delta.get("up", 0), delta.get("down", 0)
+                ib["used_up"] = ib.get("used_up", 0) + up
+                ib["used_down"] = ib.get("used_down", 0) + down
+                # Per-user history is bucketed by UTC day: fine enough to draw
+                # a usage trend, coarse enough that db.json stays small even
+                # with thousands of users.
+                hist = ib.setdefault("history", [])
+                if hist and hist[-1].get("d") == day:
+                    hist[-1]["up"] += up
+                    hist[-1]["down"] += down
+                else:
+                    hist.append({"d": day, "up": up, "down": down})
+                if len(hist) > retention:
+                    del hist[:-retention]
             total_up += delta.get("up", 0)
             total_down += delta.get("down", 0)
         for uid, count in requests_.items():
@@ -458,6 +480,87 @@ async def _enforcement_loop():
             break
         except Exception:
             await asyncio.sleep(5)
+
+
+def _history_days(db) -> int:
+    try:
+        return max(1, min(90, int((db.get("settings") or {}).get("history_days", 30))))
+    except (TypeError, ValueError):
+        return 30
+
+
+def _notify_config(db):
+    s = db.get("settings") or {}
+    token = (s.get("telegram_bot_token") or "").strip()
+    chat = (s.get("telegram_chat_id") or "").strip()
+    return (token, chat, s) if (token and chat) else (None, None, s)
+
+
+async def _scan_alerts(db) -> list:
+    """Decide which alerts are due. Returns [(uid, kind, message)].
+
+    Pure decision-making: it sends nothing and mutates nothing, which keeps
+    it straightforward to test without a Telegram token.
+    """
+    token, chat, settings = _notify_config(db)
+    if not token:
+        return []
+    sent = db.setdefault("alerts_sent", {})
+    panel = brand(db)["panel_name"]
+    try:
+        threshold = max(1, min(100, int(settings.get("notify_quota_percent", 80))))
+    except (TypeError, ValueError):
+        threshold = 80
+    try:
+        expiry_days = max(0, min(60, int(settings.get("notify_expiry_days", 3))))
+    except (TypeError, ValueError):
+        expiry_days = 3
+
+    due = []
+    for ib in db["inbounds"]:
+        st = inbound_status(ib)
+        uid = ib["uid"]
+        if settings.get("notify_quota_enabled", True) and st["quota_bytes"] > 0:
+            percent = st["used"] / st["quota_bytes"] * 100
+            if percent >= threshold and notify.should_alert(sent, uid, "quota"):
+                due.append((uid, "quota", notify.format_quota_alert(
+                    panel, ib["name"], st["used"], st["quota_bytes"], percent)))
+        if settings.get("notify_expiry_enabled", True) and st["days_left"] is not None:
+            if st["days_left"] <= expiry_days and not st["expired"]                     and notify.should_alert(sent, uid, "expiry"):
+                due.append((uid, "expiry", notify.format_expiry_alert(
+                    panel, ib["name"], st["days_left"])))
+    return due
+
+
+async def _notify_loop():
+    while True:
+        try:
+            await asyncio.sleep(NOTIFY_INTERVAL)
+            db = await store.get()
+            token, chat, _ = _notify_config(db)
+            if not token:
+                continue
+            due = await _scan_alerts(db)
+            delivered = []
+            for uid, kind, message in due:
+                try:
+                    await notify.send_message(token, chat, message)
+                    delivered.append((uid, kind))
+                except notify.TelegramError:
+                    # A bad token or chat id would otherwise make this loop
+                    # retry the same failing sends every cycle forever.
+                    break
+            if delivered:
+                def _record(db):
+                    sent = db.setdefault("alerts_sent", {})
+                    for uid, kind in delivered:
+                        notify.record_alert(sent, uid, kind)
+                    notify.prune_alerts(sent)
+                await store.mutate(_record, persist=False)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(30)
 
 
 async def _keep_alive_loop():
@@ -607,10 +710,35 @@ async def api_login(request: Request):
         await verify_password_async(password, "dummy-salt", "0" * 64)
         ok = False
 
+    twofa = db.get("twofa") or {}
+    needs_2fa = ok and bool(twofa.get("enabled")) and bool(twofa.get("secret"))
+    method = "password"
+    used_recovery = None
+
+    if needs_2fa:
+        code = str(payload.get("code") or "").strip()
+        if not code:
+            # Password was right but the second factor is still owed. This is
+            # not a failed attempt, so it must not count toward the lockout.
+            return JSONResponse({"ok": False, "twofa_required": True}, status_code=200)
+        if totp.verify_code(twofa["secret"], code):
+            method = "totp"
+        else:
+            used_recovery = totp.consume_recovery_code(code, twofa.get("recovery_hashes") or [])
+            if used_recovery:
+                method = "recovery"
+            else:
+                ok = False
+                method = "totp-failed"
+
     def _record(db):
         la = db.setdefault("login_attempts", {})
         if ok:
             la.pop(ip, None)
+            if used_recovery:
+                # Recovery codes are single use.
+                hashes = db["twofa"].get("recovery_hashes") or []
+                db["twofa"]["recovery_hashes"] = [h for h in hashes if h != used_recovery]
         else:
             rec = la.setdefault(ip, {"count": 0, "locked_until": 0, "seen": 0})
             rec["count"] = rec.get("count", 0) + 1
@@ -619,13 +747,15 @@ async def api_login(request: Request):
                 rec["locked_until"] = time.time() + LOGIN_LOCK_SECONDS
                 rec["count"] = 0
         prune_login_attempts(db)
+        _append_login_log(db, ip, ok, method)
 
     db = await store.mutate(_record)
 
     if not ok:
         raise HTTPException(401, "invalid-credentials")
 
-    resp = JSONResponse({"ok": True})
+    resp = JSONResponse({"ok": True, "recovery_remaining": len(
+        (db.get("twofa") or {}).get("recovery_hashes") or [])})
     set_session_cookie(resp, request, db, username)
     return resp
 
@@ -708,11 +838,22 @@ async def _json_body(request: Request) -> dict:
 # ------------------------------------------------------------------ settings
 VALID_FINGERPRINTS = {"chrome", "ios", "firefox", "edge", "random", "safari", "android"}
 VALID_ALPN = {"http/1.1", "h2,http/1.1", "h3,h2,http/1.1"}
-BOOL_SETTINGS = {"keep_alive", "fragment_enabled", "allow_private_destinations"}
+BOOL_SETTINGS = {
+    "keep_alive", "fragment_enabled", "allow_private_destinations",
+    "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
+}
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
     "fragment_packets": 32, "fragment_length": 32, "fragment_interval": 32,
     "panel_name": 40, "telegram_contact": 200,
+    "telegram_bot_token": 100, "telegram_chat_id": 40,
+}
+# Numeric settings: name -> (min, max)
+INT_SETTINGS = {
+    "idle_timeout_seconds": (0, 86400),
+    "notify_quota_percent": (1, 100),
+    "notify_expiry_days": (0, 60),
+    "history_days": (1, 90),
 }
 OTA_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$")
 
@@ -731,6 +872,8 @@ async def api_update_settings(request: Request, user: str = Depends(require_auth
                     raise HTTPException(400, "invalid-ota-repo")
             if k == "telegram_contact" and v and not v.startswith(("http://", "https://")):
                 v = f"https://t.me/{v.lstrip('@')}"
+            if k == "telegram_bot_token" and v and not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", v):
+                raise HTTPException(400, "invalid-bot-token")
             clean[k] = v
 
     for k in BOOL_SETTINGS:
@@ -745,17 +888,176 @@ async def api_update_settings(request: Request, user: str = Depends(require_auth
         clean["default_fingerprint"] = payload["default_fingerprint"]
     if "default_alpn" in payload and payload["default_alpn"] in VALID_ALPN:
         clean["default_alpn"] = payload["default_alpn"]
-    if "idle_timeout_seconds" in payload:
-        try:
-            clean["idle_timeout_seconds"] = max(0, min(86400, int(payload["idle_timeout_seconds"])))
-        except (TypeError, ValueError):
-            raise HTTPException(400, "invalid-idle-timeout")
+    for k, (lo, hi) in INT_SETTINGS.items():
+        if k in payload:
+            try:
+                clean[k] = max(lo, min(hi, int(payload[k])))
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"invalid-{k}")
 
     def _apply(db):
         db.setdefault("settings", {}).update(clean)
 
     db = await store.mutate(_apply)
     return {"ok": True, "settings": db["settings"], **brand(db)}
+
+
+# ------------------------------------------------------------------ login log
+def _append_login_log(db, ip: str, ok: bool, method: str):
+    log = db.setdefault("login_log", [])
+    log.append({"ts": time.time(), "ip": ip, "ok": bool(ok), "method": method})
+    if len(log) > MAX_LOGIN_LOG:
+        del log[:-MAX_LOGIN_LOG]
+
+
+@app.get("/api/login-log")
+async def api_login_log(user: str = Depends(require_auth)):
+    db = await store.get()
+    return {"entries": list(reversed(db.get("login_log", [])))[:100]}
+
+
+# ------------------------------------------------------------------ two-factor auth
+@app.get("/api/2fa/status")
+async def api_2fa_status(user: str = Depends(require_auth)):
+    db = await store.get()
+    twofa = db.get("twofa") or {}
+    return {
+        "enabled": bool(twofa.get("enabled")),
+        "confirmed_at": twofa.get("confirmed_at"),
+        "recovery_remaining": len(twofa.get("recovery_hashes") or []),
+    }
+
+
+@app.post("/api/2fa/setup")
+async def api_2fa_setup(request: Request, user: str = Depends(require_auth)):
+    """Stage a secret. It stays inactive until a valid code confirms it, so a
+    half-finished enrolment can never lock the admin out."""
+    db = await store.get()
+    if (db.get("twofa") or {}).get("enabled"):
+        raise HTTPException(400, "already-enabled")
+    secret = totp.generate_secret()
+
+    def _apply(db):
+        db["twofa"]["secret"] = secret
+        db["twofa"]["enabled"] = False
+        db["twofa"]["confirmed_at"] = None
+
+    await store.mutate(_apply)
+    return {
+        "secret": secret,
+        "uri": totp.provisioning_uri(secret, user, brand(db)["panel_name"]),
+    }
+
+
+@app.get("/api/2fa/qr")
+async def api_2fa_qr(user: str = Depends(require_auth)):
+    db = await store.get()
+    secret = (db.get("twofa") or {}).get("secret")
+    if not secret:
+        raise HTTPException(404, "no-pending-secret")
+    uri = totp.provisioning_uri(secret, user, brand(db)["panel_name"])
+
+    def _render() -> bytes:
+        img = qrcode.make(uri, border=2)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    png = await asyncio.to_thread(_render)
+    return StreamingResponse(io.BytesIO(png), media_type="image/png",
+                             headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/2fa/enable")
+async def api_2fa_enable(request: Request, user: str = Depends(require_auth)):
+    payload = await _json_body(request)
+    code = str(payload.get("code") or "").strip()
+    db = await store.get()
+    twofa = db.get("twofa") or {}
+    secret = twofa.get("secret")
+    if not secret:
+        raise HTTPException(400, "no-pending-secret")
+    if twofa.get("enabled"):
+        raise HTTPException(400, "already-enabled")
+    if not totp.verify_code(secret, code):
+        raise HTTPException(400, "invalid-code")
+
+    codes = totp.generate_recovery_codes()
+    hashes = [totp.hash_recovery_code(c) for c in codes]
+
+    def _apply(db):
+        db["twofa"]["enabled"] = True
+        db["twofa"]["confirmed_at"] = time.time()
+        db["twofa"]["recovery_hashes"] = hashes
+
+    await store.mutate(_apply)
+    # The only time the plaintext codes are ever returned.
+    return {"ok": True, "recovery_codes": codes}
+
+
+@app.post("/api/2fa/disable")
+async def api_2fa_disable(request: Request, user: str = Depends(require_auth)):
+    """Requires the account password: a stolen session alone must not be able
+    to strip the second factor."""
+    payload = await _json_body(request)
+    password = payload.get("password") or ""
+    db = await store.get()
+    admin = db["admin"]
+    if not await verify_password_async(password, admin["salt"], admin["password_hash"]):
+        raise HTTPException(401, "wrong-password")
+
+    def _apply(db):
+        db["twofa"] = {"enabled": False, "secret": "", "recovery_hashes": [], "confirmed_at": None}
+
+    await store.mutate(_apply)
+    return {"ok": True}
+
+
+@app.post("/api/2fa/recovery-codes")
+async def api_2fa_regen_recovery(request: Request, user: str = Depends(require_auth)):
+    payload = await _json_body(request)
+    password = payload.get("password") or ""
+    db = await store.get()
+    admin = db["admin"]
+    if not await verify_password_async(password, admin["salt"], admin["password_hash"]):
+        raise HTTPException(401, "wrong-password")
+    if not (db.get("twofa") or {}).get("enabled"):
+        raise HTTPException(400, "not-enabled")
+
+    codes = totp.generate_recovery_codes()
+    hashes = [totp.hash_recovery_code(c) for c in codes]
+
+    def _apply(db):
+        db["twofa"]["recovery_hashes"] = hashes
+
+    await store.mutate(_apply)
+    return {"ok": True, "recovery_codes": codes}
+
+
+# ------------------------------------------------------------------ notifications
+@app.post("/api/notify/test")
+async def api_notify_test(user: str = Depends(require_auth)):
+    db = await store.get()
+    token, chat, _ = _notify_config(db)
+    if not token:
+        raise HTTPException(400, "not-configured")
+    try:
+        await notify.verify_credentials(token, chat)
+    except notify.TelegramError as e:
+        raise HTTPException(502, f"telegram: {e}")
+    return {"ok": True}
+
+
+@app.get("/api/notify/status")
+async def api_notify_status(user: str = Depends(require_auth)):
+    db = await store.get()
+    token, chat, settings = _notify_config(db)
+    return {
+        "configured": bool(token),
+        "quota_enabled": bool(settings.get("notify_quota_enabled", True)),
+        "expiry_enabled": bool(settings.get("notify_expiry_enabled", True)),
+        "pending_alerts": len(await _scan_alerts(db)) if token else 0,
+    }
 
 
 # ------------------------------------------------------------------ inbounds api
@@ -814,7 +1116,9 @@ def sanitize_inbound_payload(payload: dict, partial: bool) -> dict:
 
 def serialize_inbound(ib, include_secrets: bool = True) -> dict:
     st = inbound_status(ib)
-    out = {k: v for k, v in ib.items() if k != "uuid"}
+    # "history" is up to 90 daily buckets per user; shipping it inside every
+    # listing would dominate the payload. It has its own endpoint.
+    out = {k: v for k, v in ib.items() if k not in ("uuid", "history")}
     if include_secrets:
         out["uuid"] = ib.get("uuid")
     conns = runtime["active"].get(ib["uid"], {})
@@ -962,6 +1266,236 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
     await _disconnect_uid(uid)
     runtime["active"].pop(uid, None)
     return {"ok": True, "inbound": serialize_inbound(inbound_by_uid(db, uid))}
+
+
+# ------------------------------------------------------------------ plans
+MAX_PLANS = 50
+
+
+def sanitize_plan(payload: dict) -> dict:
+    name = str(payload.get("name") or "").strip()[:48]
+    if not name:
+        raise HTTPException(400, "invalid-name")
+    return {
+        "name": name,
+        "days": _as_number(payload.get("days"), "days", 0, 3650, True),
+        "quota_gb": _as_number(payload.get("quota_gb"), "quota_gb", 0, 1_000_000, False),
+        "max_connections": _as_number(payload.get("max_connections"), "max_connections", 0, 10_000, True),
+        "max_requests": _as_number(payload.get("max_requests"), "max_requests", 0, 100_000_000, True),
+    }
+
+
+@app.get("/api/plans")
+async def api_list_plans(user: str = Depends(require_auth)):
+    db = await store.get()
+    return {"plans": db.get("plans", [])}
+
+
+@app.post("/api/plans")
+async def api_create_plan(request: Request, user: str = Depends(require_auth)):
+    payload = await _json_body(request)
+    fields = sanitize_plan(payload)
+    db = await store.get()
+    if len(db.get("plans", [])) >= MAX_PLANS:
+        raise HTTPException(400, "plan-limit-reached")
+    plan = {"id": gen_uid()}
+    plan.update(fields)
+
+    def _apply(db):
+        db.setdefault("plans", []).append(plan)
+
+    await store.mutate(_apply)
+    return {"ok": True, "plan": plan}
+
+
+@app.patch("/api/plans/{plan_id}")
+async def api_update_plan(plan_id: str, request: Request, user: str = Depends(require_auth)):
+    payload = await _json_body(request)
+    fields = sanitize_plan(payload)
+    result = {}
+
+    def _apply(db):
+        for plan in db.setdefault("plans", []):
+            if plan.get("id") == plan_id:
+                plan.update(fields)
+                result.update(plan)
+                return
+        raise HTTPException(404, "not-found")
+
+    await store.mutate(_apply)
+    return {"ok": True, "plan": result}
+
+
+@app.delete("/api/plans/{plan_id}")
+async def api_delete_plan(plan_id: str, user: str = Depends(require_auth)):
+    found = {"v": False}
+
+    def _apply(db):
+        plans = db.setdefault("plans", [])
+        before = len(plans)
+        db["plans"] = [pl for pl in plans if pl.get("id") != plan_id]
+        found["v"] = len(db["plans"]) != before
+
+    await store.mutate(_apply)
+    if not found["v"]:
+        raise HTTPException(404, "not-found")
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ bulk operations
+@app.post("/api/inbounds/bulk")
+async def api_bulk_create(request: Request, user: str = Depends(require_auth)):
+    """Create N users from a plan (or explicit fields) in one write.
+
+    Provisioning a batch one HTTP call at a time meant one full db.json
+    rewrite per user; this is a single mutation for the whole batch.
+    """
+    payload = await _json_body(request)
+    count = _as_number(payload.get("count"), "count", 1, MAX_BULK_CREATE, True)
+    prefix = str(payload.get("prefix") or "user").strip()[:40] or "user"
+    start = _as_number(payload.get("start_index") or 1, "start_index", 1, 1_000_000, True)
+
+    db = await store.get()
+    plan_id = payload.get("plan_id")
+    if plan_id:
+        plan = next((pl for pl in db.get("plans", []) if pl.get("id") == plan_id), None)
+        if not plan:
+            raise HTTPException(404, "plan-not-found")
+        base = {
+            "quota_gb": plan.get("quota_gb", 0),
+            "expire_days": plan.get("days", 0),
+            "max_connections": plan.get("max_connections", 0),
+            "max_requests": plan.get("max_requests", 0),
+        }
+    else:
+        base = {
+            "quota_gb": _as_number(payload.get("quota_gb"), "quota_gb", 0, 1_000_000, False),
+            "expire_days": _as_number(payload.get("expire_days"), "expire_days", 0, 3650, True),
+            "max_connections": _as_number(payload.get("max_connections"), "max_connections", 0, 10_000, True),
+            "max_requests": _as_number(payload.get("max_requests"), "max_requests", 0, 100_000_000, True),
+        }
+
+    if len(db["inbounds"]) + count > MAX_INBOUNDS:
+        raise HTTPException(400, "inbound-limit-reached")
+
+    settings = db.get("settings") or {}
+    fp = payload.get("fp") or settings.get("default_fingerprint", "chrome")
+    if fp not in VALID_FINGERPRINTS:
+        raise HTTPException(400, "invalid-fp")
+    strict = bool(payload.get("strict_single_ip"))
+    note = str(payload.get("note") or "").strip()[:200]
+
+    now = time.time()
+    created = []
+    width = len(str(start + count - 1))
+    for i in range(count):
+        ib = {
+            "uid": gen_uid(),
+            "uuid": gen_uuid(),
+            "name": f"{prefix}-{str(start + i).zfill(width)}"[:64],
+            "enabled": True,
+            "created_at": now,
+            "expire_at": (now + base["expire_days"] * 86400) if base["expire_days"] > 0 else None,
+            "request_count": 0,
+            "used_up": 0,
+            "used_down": 0,
+            "history": [],
+            "fp": fp,
+            "strict_single_ip": strict,
+            "note": note,
+        }
+        ib.update(base)
+        created.append(ib)
+
+    def _apply(db):
+        db["inbounds"].extend(created)
+
+    await store.mutate(_apply)
+    return {"ok": True, "created": len(created),
+            "inbounds": [serialize_inbound(ib) for ib in created]}
+
+
+BULK_ACTIONS = {"delete", "enable", "disable", "reset-usage", "renew"}
+
+
+@app.post("/api/inbounds/bulk-action")
+async def api_bulk_action(request: Request, user: str = Depends(require_auth)):
+    payload = await _json_body(request)
+    action = payload.get("action")
+    if action not in BULK_ACTIONS:
+        raise HTTPException(400, "invalid-action")
+    uids = payload.get("uids")
+    if not isinstance(uids, list) or not uids:
+        raise HTTPException(400, "no-uids")
+    uids = [str(u) for u in uids][:MAX_INBOUNDS]
+    days = _as_number(payload.get("days") or 30, "days", 1, 3650, True) if action == "renew" else 0
+    affected = {"n": 0}
+
+    def _apply(db):
+        target = set(uids)
+        if action == "delete":
+            before = len(db["inbounds"])
+            db["inbounds"] = [ib for ib in db["inbounds"] if ib.get("uid") not in target]
+            affected["n"] = before - len(db["inbounds"])
+            return
+        for ib in db["inbounds"]:
+            if ib.get("uid") not in target:
+                continue
+            if action == "enable":
+                ib["enabled"] = True
+            elif action == "disable":
+                ib["enabled"] = False
+            elif action == "reset-usage":
+                ib["used_up"] = 0
+                ib["used_down"] = 0
+                ib["request_count"] = 0
+            elif action == "renew":
+                base = max(time.time(), ib.get("expire_at") or 0)
+                ib["expire_at"] = base + days * 86400
+            affected["n"] += 1
+
+    await store.mutate(_apply)
+
+    # Anything that can revoke access must also drop live sessions, or the
+    # user keeps proxying until their connection happens to end.
+    if action in ("delete", "disable"):
+        for uid in uids:
+            await _disconnect_uid(uid)
+            if action == "delete":
+                runtime["active"].pop(uid, None)
+                runtime["pending_traffic"].pop(uid, None)
+                runtime["pending_requests"].pop(uid, None)
+    elif action == "reset-usage":
+        for uid in uids:
+            runtime["pending_traffic"].pop(uid, None)
+            runtime["pending_requests"].pop(uid, None)
+
+    if not affected["n"]:
+        raise HTTPException(404, "not-found")
+    return {"ok": True, "action": action, "affected": affected["n"]}
+
+
+# ------------------------------------------------------------------ per-user history
+def _history_series(db, ib) -> list:
+    """Dense daily series - gaps filled with zeros so the chart has no holes."""
+    days = _history_days(db)
+    buckets = {h.get("d"): h for h in ib.get("history", []) if isinstance(h, dict)}
+    now = time.time()
+    out = []
+    for i in range(days - 1, -1, -1):
+        key = time.strftime("%Y-%m-%d", time.gmtime(now - i * 86400))
+        rec = buckets.get(key) or {}
+        out.append({"d": key, "up": rec.get("up", 0), "down": rec.get("down", 0)})
+    return out
+
+
+@app.get("/api/inbounds/{uid}/history")
+async def api_inbound_history(uid: str, user: str = Depends(require_auth)):
+    db = await store.get()
+    ib = inbound_by_uid(db, uid)
+    if not ib:
+        raise HTTPException(404, "not-found")
+    return {"uid": uid, "name": ib["name"], "history": _history_series(db, ib)}
 
 
 # ------------------------------------------------------------------ link building

@@ -104,13 +104,13 @@
     ctx.clearRect(0, 0, width, height);
 
     const styles = getComputedStyle(document.documentElement);
-    const goldColor = styles.getPropertyValue('--gold-500').trim() || '#c9a227';
-    const goldLight = styles.getPropertyValue('--gold-300').trim() || '#e6c765';
-    const azureColor = styles.getPropertyValue('--azure').trim() || '#4d9fec';
-    const emeraldColor = styles.getPropertyValue('--emerald').trim() || '#2fbf85';
-    const textColor = styles.getPropertyValue('--text-2').trim() || '#9d93bd';
-    const textMuted = styles.getPropertyValue('--text-muted').trim() || '#746a92';
-    const gridColor = styles.getPropertyValue('--border-soft').trim() || 'rgba(201,162,39,0.2)';
+    const goldColor = styles.getPropertyValue('--accent').trim() || '#22d3ee';
+    const goldLight = styles.getPropertyValue('--accent-hover').trim() || '#67e8f9';
+    const azureColor = styles.getPropertyValue('--info').trim() || '#60a5fa';
+    const emeraldColor = styles.getPropertyValue('--ok').trim() || '#34d399';
+    const textColor = styles.getPropertyValue('--text-2').trim() || '#8b949e';
+    const textMuted = styles.getPropertyValue('--text-3').trim() || '#5d666f';
+    const gridColor = styles.getPropertyValue('--border').trim() || '#1e2228';
 
     const chartW = width - padding.left - padding.right;
     const chartH = height - padding.top - padding.bottom;

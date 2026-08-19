@@ -21,13 +21,18 @@ from typing import Any, Dict, Optional
 DATA_DIR = os.environ.get("STANNG_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 DB_PATH = os.path.join(DATA_DIR, "db.json")
 
-SCHEMA_VERSION = 4  # v4: login_attempts pruning + sessions_epoch
+SCHEMA_VERSION = 5  # v5: plans, per-user history, 2FA, notifications
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
 # distinct client IP that ever failed a login, and every entry was rewritten to
 # disk on each save.
 LOGIN_ATTEMPT_TTL = 24 * 3600
+
+# Hard ceilings for the collections that append over time. db.json is read
+# and rewritten whole, so unbounded growth costs memory and write latency.
+MAX_LOGIN_LOG = 200
+MAX_HISTORY_DAYS = 90
 
 _lock = asyncio.Lock()
 
@@ -36,6 +41,12 @@ DEFAULT_DB: Dict[str, Any] = {
     "admin": None,          # {"username": str, "password_hash": str, "salt": str, "created_at": ts}
     "secret_key": None,     # generated on first run, used to sign session cookies
     "sessions_epoch": 0,    # bumped to invalidate every issued session cookie
+    "twofa": {              # TOTP enrolment; "enabled" gates the login check
+        "enabled": False,
+        "secret": "",
+        "recovery_hashes": [],
+        "confirmed_at": None,
+    },
     "settings": {
         "lang": "fa",
         "theme": "dark",
@@ -63,8 +74,21 @@ DEFAULT_DB: Dict[str, Any] = {
         # metadata endpoint (169.254.169.254) can pivot into the host itself.
         "allow_private_destinations": False,
         "idle_timeout_seconds": 600,
+        # ---- notifications (admin's own bot; blank token disables everything) ----
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
+        "notify_quota_enabled": True,
+        "notify_quota_percent": 80,
+        "notify_expiry_enabled": True,
+        "notify_expiry_days": 3,
+        "notify_daily_report": False,
+        # ---- per-user traffic history ----
+        "history_days": 30,
     },
     "inbounds": [],       # list of inbound/user dicts
+    "plans": [],          # reusable presets: {id, name, days, quota_gb, max_connections, max_requests}
+    "login_log": [],      # bounded audit trail: {ts, ip, ok, method, reason}
+    "alerts_sent": {},    # "<uid>:<kind>" -> ts, for notification cooldowns
     "stats": {
         "started_at": time.time(),
         "total_up": 0,
@@ -181,6 +205,28 @@ def normalize_db(db: Dict[str, Any]) -> bool:
     if not isinstance(db.get("login_attempts"), dict):
         db["login_attempts"] = {}
         changed = True
+    if not isinstance(db.get("plans"), list):
+        db["plans"] = []
+        changed = True
+    if not isinstance(db.get("alerts_sent"), dict):
+        db["alerts_sent"] = {}
+        changed = True
+    if not isinstance(db.get("twofa"), dict):
+        db["twofa"] = json.loads(json.dumps(DEFAULT_DB["twofa"]))
+        changed = True
+    else:
+        for k, v in DEFAULT_DB["twofa"].items():
+            if k not in db["twofa"]:
+                db["twofa"][k] = v
+                changed = True
+    # The login log is append-only from the app's side; trim on load so a
+    # long-running panel cannot grow db.json without bound.
+    if not isinstance(db.get("login_log"), list):
+        db["login_log"] = []
+        changed = True
+    elif len(db["login_log"]) > MAX_LOGIN_LOG:
+        del db["login_log"][:-MAX_LOGIN_LOG]
+        changed = True
 
     # Repair inbound records so one bad row cannot break every listing.
     kept = []
@@ -201,6 +247,13 @@ def normalize_db(db: Dict[str, Any]) -> bool:
             if ib.get("expire_at") is not None:
                 ib["expire_at"] = None
                 changed = True
+        # Daily traffic buckets: [{"d": "YYYY-MM-DD", "up": n, "down": n}]
+        if not isinstance(ib.get("history"), list):
+            ib["history"] = []
+            changed = True
+        elif len(ib["history"]) > MAX_HISTORY_DAYS:
+            del ib["history"][:-MAX_HISTORY_DAYS]
+            changed = True
         kept.append(ib)
     if len(kept) != len(db["inbounds"]):
         db["inbounds"] = kept
