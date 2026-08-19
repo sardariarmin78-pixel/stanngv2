@@ -33,17 +33,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+import cluster
 import notify
 import totp
 from colo_map import describe_colo
 from storage import (
-    MAX_LOGIN_LOG, normalize_db, prune_login_attempts, store,
+    MAX_LOGIN_LOG, RUNTIME_DIR, normalize_db, prune_login_attempts, store,
     hash_password_async, verify_password_async,
 )
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 
 def _env_str(name: str, default: str) -> str:
@@ -77,6 +78,12 @@ DISK_FLUSH_INTERVAL = 15    # seconds: persist the db if anything changed
 ENFORCE_INTERVAL = 10       # seconds: kick sessions that ran past their limits
 COLO_CACHE_TTL = 3600       # seconds: the edge datacentre does not move often
 NOTIFY_INTERVAL = 300       # seconds: scan for quota/expiry alerts
+JOURNAL_INTERVAL = 1        # seconds: publish this worker's runtime slice
+
+# One event loop saturates a single core, and measured aggregate throughput
+# *falls* as concurrency rises. "auto" spreads the relay over every core.
+WORKER_COUNT = cluster.resolve_workers(os.environ.get("STANNG_WORKERS", "auto"))
+MULTIPROCESS = WORKER_COUNT > 1
 MAX_BULK_CREATE = 200       # users creatable in one bulk request
 
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -87,7 +94,30 @@ runtime = {
     "pending_traffic": {},
     "pending_requests": {},
     "colo": {"value": None, "at": 0.0},
+    # Set in lifespan when running multi-worker; None means single process.
+    "journal": None,
 }
+
+
+def _journal():
+    return runtime["journal"]
+
+
+def merged_connection_count(uid: str) -> int:
+    """Live sessions for a user across every worker."""
+    local = len(runtime["active"].get(uid, {}))
+    j = _journal()
+    if j is None:
+        return local
+    return j.merged_connection_counts(runtime["active"]).get(uid, local)
+
+
+def merged_active_ips(uid: str) -> list:
+    conns = runtime["active"].get(uid, {})
+    j = _journal()
+    if j is None:
+        return sorted({c["ip"] for c in conns.values()})
+    return j.merged_active_ips(runtime["active"]).get(uid, sorted({c["ip"] for c in conns.values()}))
 
 
 @asynccontextmanager
@@ -97,8 +127,13 @@ async def lifespan(app: FastAPI):
         psutil.cpu_percent(interval=None)
     except Exception:
         pass
+    if MULTIPROCESS:
+        store.enable_multiprocess()
+        runtime["journal"] = cluster.RuntimeJournal(RUNTIME_DIR)
+
     tasks = [
         asyncio.create_task(_periodic_flush()),
+        asyncio.create_task(_journal_loop()),
         asyncio.create_task(_disk_flush_loop()),
         asyncio.create_task(_enforcement_loop()),
         asyncio.create_task(_keep_alive_loop()),
@@ -115,6 +150,9 @@ async def lifespan(app: FastAPI):
             await store.flush(force=True)
         except Exception:
             pass
+        j = _journal()
+        if j is not None:
+            j.remove()
 
 
 app = FastAPI(title=DEFAULT_PANEL_NAME, version=APP_VERSION, lifespan=lifespan)
@@ -341,7 +379,7 @@ def inbound_status(ib) -> dict:
         "request_exceeded": req_exceeded,
         "live_enabled": bool(manually_enabled and not quota_exceeded
                              and not expired and not req_exceeded),
-        "active_connections": len(runtime["active"].get(ib["uid"], {})),
+        "active_connections": merged_connection_count(ib["uid"]),
         "request_count": req_count,
         "days_left": max(0, int((expire_at - now) // 86400)) if expire_at else None,
     }
@@ -361,13 +399,23 @@ def _relay_options(db) -> dict:
 
 # ------------------------------------------------------------------ background tasks
 async def _fold_pending_traffic():
-    """Move buffered byte/request counts into the in-memory db (no disk write)."""
+    """Move buffered byte/request counts into the in-memory db (no disk write).
+
+    Each worker folds only its own buffers. Siblings fold theirs, and the
+    file lock in the store serialises the resulting writes, so nothing is
+    double-counted and nothing is lost.
+    """
     traffic = runtime["pending_traffic"]
     requests_ = runtime["pending_requests"]
     if not traffic and not requests_:
         return
     runtime["pending_traffic"] = {}
     runtime["pending_requests"] = {}
+    # Clear our published slice too: the bytes are about to land in the db,
+    # and leaving them in the journal would let a sibling count them again.
+    j = _journal()
+    if j is not None:
+        j.publish(runtime["active"], {}, {}, force=True)
 
     day = time.strftime("%Y-%m-%d", time.gmtime())
 
@@ -414,6 +462,30 @@ async def _fold_pending_traffic():
     # persist=False: the disk flush loop batches these together. This used to
     # rewrite the whole db.json every 5 seconds, plus once per connection.
     await store.mutate(_apply, persist=False)
+
+
+async def _journal_loop():
+    """Publish this worker's live slice so siblings can enforce limits.
+
+    Only the fields other workers need are written — never the WebSocket
+    objects themselves.
+    """
+    if not MULTIPROCESS:
+        return
+    while True:
+        try:
+            await asyncio.sleep(JOURNAL_INTERVAL)
+            j = _journal()
+            if j is None:
+                continue
+            await asyncio.to_thread(
+                j.publish, runtime["active"], runtime["pending_traffic"],
+                runtime["pending_requests"], True,
+            )
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(5)
 
 
 async def _periodic_flush():
@@ -1122,9 +1194,8 @@ def serialize_inbound(ib, include_secrets: bool = True) -> dict:
     out = {k: v for k, v in ib.items() if k not in ("uuid", "history")}
     if include_secrets:
         out["uuid"] = ib.get("uuid")
-    conns = runtime["active"].get(ib["uid"], {})
     # Previously hardcoded to None, so the panel could never show who was online.
-    out["active_ips"] = sorted({c["ip"] for c in conns.values()})
+    out["active_ips"] = merged_active_ips(ib["uid"])
     out["status"] = st
     return out
 
@@ -1956,9 +2027,17 @@ async def stats(user: str = Depends(require_auth)):
         "total_down": db["stats"].get("total_down", 0) + pending_down,
         "hourly": db["stats"].get("hourly", []),
         "inbounds_count": len(db["inbounds"]),
-        "active_connections": sum(len(v) for v in runtime["active"].values()),
+        "active_connections": _total_active_connections(),
+        "workers": WORKER_COUNT,
         "location": describe_colo(await _current_colo()),
     }
+
+
+def _total_active_connections() -> int:
+    j = _journal()
+    if j is None:
+        return sum(len(v) for v in runtime["active"].values())
+    return sum(j.merged_connection_counts(runtime["active"]).values())
 
 
 def _ver_tuple(v):
@@ -2169,12 +2248,14 @@ async def ws_endpoint(websocket: WebSocket, uid: str):
     active_for_uid = runtime["active"].setdefault(uid, {})
     max_conn = ib.get("max_connections") or 0
 
+    # Limits are evaluated against every worker's view, not just this one.
+    # Without that, N workers would each grant the full allowance.
     if ib.get("strict_single_ip"):
-        existing_ips = {v["ip"] for v in active_for_uid.values()}
+        existing_ips = set(merged_active_ips(uid))
         if existing_ips and ip not in existing_ips:
             await websocket.close(code=1008)
             return
-    if max_conn > 0 and len(active_for_uid) >= max_conn:
+    if max_conn > 0 and merged_connection_count(uid) >= max_conn:
         await websocket.close(code=1008)
         return
 
@@ -2203,14 +2284,17 @@ async def ws_endpoint(websocket: WebSocket, uid: str):
             runtime["active"].pop(uid, None)
 
 
-if __name__ == "__main__":
+def _serve():
     import uvicorn
 
-    uvicorn.run(
-        "main:app",
-        host=os.environ.get("HOST", "0.0.0.0"),
-        port=_env_int("PORT", 8000),
-        log_level=os.environ.get("LOG_LEVEL", "info"),
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = _env_int("PORT", 8000)
+    log_level = os.environ.get("LOG_LEVEL", "info")
+
+    kwargs = dict(
+        host=host,
+        port=port,
+        log_level=log_level,
         # Let uvicorn parse the platform's forwarded headers; we still pick the
         # trustworthy X-Forwarded-For entry ourselves via TRUSTED_PROXY_HOPS.
         proxy_headers=True,
@@ -2218,3 +2302,17 @@ if __name__ == "__main__":
         ws_ping_interval=20,
         ws_ping_timeout=20,
     )
+
+    if not MULTIPROCESS:
+        uvicorn.run("main:app", **kwargs)
+        return
+
+    # Workers each bind the same port; the kernel spreads accepts across
+    # them, which is what lifts the relay off a single core.
+    cluster.cleanup_journals(RUNTIME_DIR)
+    print(f"[stanng] starting {WORKER_COUNT} workers on {host}:{port}", flush=True)
+    uvicorn.run("main:app", workers=WORKER_COUNT, **kwargs)
+
+
+if __name__ == "__main__":
+    _serve()

@@ -18,8 +18,12 @@ import secrets
 import time
 from typing import Any, Dict, Optional
 
+from cluster import FileLock
+
 DATA_DIR = os.environ.get("STANNG_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 DB_PATH = os.path.join(DATA_DIR, "db.json")
+LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
+RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
 SCHEMA_VERSION = 6  # v6: multi-endpoint subscriptions
 PBKDF2_ITERATIONS = 260_000
@@ -317,14 +321,60 @@ def load_db() -> Dict[str, Any]:
 
 
 class Store:
-    """Async-safe accessor around the JSON db."""
+    """Async-safe accessor around the JSON db.
+
+    In single-process mode this is exactly what it always was: the db lives
+    in memory and is written back atomically.
+
+    In multi-worker mode (`enable_multiprocess`) every mutation takes a
+    cross-process file lock and re-reads from disk first, so concurrent
+    workers cannot clobber each other. Readers notice a sibling's write via
+    the file's mtime and reload in place — in place specifically, so any
+    reference already handed out by get() stays valid.
+    """
 
     def __init__(self):
         self.db = load_db()
         self._dirty = False
         self._last_write = 0.0
+        self._multiprocess = False
+        self._mtime = self._current_mtime()
 
+    # ---------------------------------------------------------------- mode
+    def enable_multiprocess(self):
+        self._multiprocess = True
+
+    @staticmethod
+    def _current_mtime() -> float:
+        try:
+            return os.path.getmtime(DB_PATH)
+        except OSError:
+            return 0.0
+
+    def _reload_if_stale(self):
+        """Pull in another worker's write. No-op in single-process mode."""
+        if not self._multiprocess:
+            return False
+        mtime = self._current_mtime()
+        if mtime == self._mtime:
+            return False
+        try:
+            with open(DB_PATH, "r", encoding="utf-8") as f:
+                fresh = json.load(f)
+            if not isinstance(fresh, dict):
+                return False
+        except (OSError, json.JSONDecodeError):
+            return False
+        normalize_db(fresh)
+        # Mutate in place: callers hold the same dict object.
+        self.db.clear()
+        self.db.update(fresh)
+        self._mtime = mtime
+        return True
+
+    # ---------------------------------------------------------------- access
     async def get(self) -> Dict[str, Any]:
+        self._reload_if_stale()
         return self.db
 
     async def mutate(self, fn, persist: bool = True):
@@ -335,9 +385,32 @@ class Store:
         written and the exception propagates to the caller.
         """
         async with _lock:
-            fn(self.db)
-            if persist:
-                await self._write_locked()
+            if not self._multiprocess:
+                fn(self.db)
+                if persist:
+                    await self._write_locked()
+                else:
+                    self._dirty = True
+                return self.db
+
+            # Multi-worker: the whole read-modify-write must be exclusive, or
+            # two workers editing different users would each write a copy that
+            # omits the other's change.
+            def _guarded():
+                with FileLock(LOCK_PATH):
+                    self._reload_if_stale()
+                    fn(self.db)
+                    if persist:
+                        data = json.dumps(self.db, ensure_ascii=False, indent=2)
+                        _atomic_write(DB_PATH, data)
+                        return True
+                return False
+
+            wrote = await asyncio.to_thread(_guarded)
+            if wrote:
+                self._mtime = self._current_mtime()
+                self._dirty = False
+                self._last_write = time.time()
             else:
                 self._dirty = True
             return self.db
@@ -347,7 +420,16 @@ class Store:
         async with _lock:
             if not (self._dirty or force):
                 return False
-            await self._write_locked()
+            if self._multiprocess:
+                def _guarded():
+                    with FileLock(LOCK_PATH):
+                        _atomic_write(DB_PATH, json.dumps(self.db, ensure_ascii=False, indent=2))
+                await asyncio.to_thread(_guarded)
+                self._mtime = self._current_mtime()
+                self._dirty = False
+                self._last_write = time.time()
+            else:
+                await self._write_locked()
             return True
 
     async def _write_locked(self):
@@ -357,6 +439,7 @@ class Store:
         self._dirty = False
         self._last_write = time.time()
         await asyncio.to_thread(_atomic_write, DB_PATH, data)
+        self._mtime = self._current_mtime()
 
     def snapshot_json(self) -> str:
         return json.dumps(self.db, ensure_ascii=False, indent=2)
