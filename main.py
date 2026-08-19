@@ -41,6 +41,7 @@ import cluster
 import notify
 import subscription
 import totp
+import userbot
 from colo_map import describe_colo
 from storage import (
     DATA_DIR as DATA_DIR_PATH,
@@ -114,6 +115,7 @@ ENFORCE_INTERVAL = 10       # seconds: kick sessions that ran past their limits
 COLO_CACHE_TTL = 3600       # seconds: the edge datacentre does not move often
 NOTIFY_INTERVAL = 300       # seconds: scan for quota/expiry alerts
 BACKUP_CHECK_INTERVAL = 900 # seconds: how often to consider an auto-backup
+USERBOT_IDLE_SLEEP = 3      # seconds to back off after a bot polling error
 JOURNAL_INTERVAL = 1        # seconds: publish this worker's runtime slice
 
 # One event loop saturates a single core, and measured aggregate throughput
@@ -130,6 +132,8 @@ runtime = {
     "pending_traffic": {},
     "pending_requests": {},
     "colo": {"value": None, "at": 0.0},
+    # chat id -> [request timestamps]; in memory only, so a restart forgives.
+    "bot_rate": {},
     # Set in lifespan when running multi-worker; None means single process.
     "journal": None,
     # Elects one worker for cluster-wide jobs (alerts, backups, keep-alive).
@@ -198,6 +202,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_keep_alive_loop()),
         asyncio.create_task(_notify_loop()),
         asyncio.create_task(_backup_loop()),
+        asyncio.create_task(_userbot_loop()),
     ]
     try:
         yield
@@ -790,6 +795,124 @@ async def _backup_loop():
             await asyncio.sleep(60)
 
 
+class _BotContext:
+    """Everything the bot is allowed to touch — deliberately read-only.
+
+    The bot can show a config and a usage figure. It can never create, extend,
+    disable or delete anything, so a leaked bot token is not a leaked panel.
+    """
+
+    def __init__(self, db, request_origin: str):
+        self.db = db
+        self.origin = request_origin
+        self.panel_name = brand(db)["panel_name"]
+        self._pending_binds = {}
+
+    def lookup(self, uid: str):
+        ib = inbound_by_uid(self.db, uid)
+        if not ib:
+            return None
+        return {"inbound": ib, "status": inbound_status(ib)}
+
+    def bound_uid(self, chat):
+        return (self.db.get("bot_bindings") or {}).get(str(chat))
+
+    def bind(self, chat, uid: str):
+        self._pending_binds[str(chat)] = uid
+
+    def links(self, uid: str):
+        ib = inbound_by_uid(self.db, uid)
+        if not ib:
+            return "", []
+        configs = build_configs_for_origin(self.db, ib, self.origin)
+        return f"{self.origin}/sub/{uid}", configs
+
+    @property
+    def pending_binds(self):
+        return self._pending_binds
+
+
+def _bot_origin(db) -> str:
+    """Public origin for links the bot hands out.
+
+    There is no request to derive it from here, so a configured public domain
+    is the only reliable source; without one the bot says so rather than
+    handing out a URL pointing at localhost.
+    """
+    domain = ((db.get("settings") or {}).get("public_domain") or "").strip()
+    if not domain:
+        return ""
+    host, port = _split_host_port(domain)
+    if port and port not in ("80", "443"):
+        return f"https://{host}:{port}"
+    return f"https://{host}"
+
+
+async def _userbot_loop():
+    """Long-poll the user bot and answer commands.
+
+    Leader-gated: several workers polling the same token would each consume a
+    slice of the updates and answer only part of them.
+    """
+    while True:
+        try:
+            db = await store.get()
+            settings = db.get("settings") or {}
+            token = (settings.get("userbot_token") or "").strip()
+            if not (settings.get("userbot_enabled") and token) or not _is_leader():
+                await asyncio.sleep(5)
+                continue
+
+            offset = int(db.get("bot_offset") or 0)
+            try:
+                updates = await userbot.get_updates(token, offset)
+            except userbot.UserBotError:
+                await asyncio.sleep(USERBOT_IDLE_SLEEP)
+                continue
+            if not updates:
+                await asyncio.sleep(1)
+                continue
+
+            origin = _bot_origin(db)
+            ctx = _BotContext(db, origin)
+            replies = []
+            highest = offset
+
+            for update in updates:
+                highest = max(highest, int(update.get("update_id", 0)) + 1)
+                message = update.get("message") or {}
+                chat = (message.get("chat") or {}).get("id")
+                if chat is None:
+                    continue
+                if not userbot.allow(runtime["bot_rate"], chat):
+                    continue
+                try:
+                    reply = await userbot.handle_message(message, ctx)
+                except Exception:
+                    reply = None
+                if reply:
+                    replies.append((chat, reply))
+
+            def _apply(db):
+                db["bot_offset"] = highest
+                if ctx.pending_binds:
+                    bindings = db.setdefault("bot_bindings", {})
+                    bindings.update(ctx.pending_binds)
+                    userbot.prune_bindings(bindings)
+
+            await store.mutate(_apply, persist=bool(ctx.pending_binds))
+
+            for chat, text in replies:
+                try:
+                    await userbot.send(token, chat, text)
+                except userbot.UserBotError:
+                    pass
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(USERBOT_IDLE_SLEEP)
+
+
 async def _keep_alive_loop():
     """Ping our own public URL so free-tier hosts don't idle the service out.
 
@@ -1070,13 +1193,14 @@ VALID_ALPN = {"http/1.1", "h2,http/1.1", "h3,h2,http/1.1"}
 BOOL_SETTINGS = {
     "keep_alive", "fragment_enabled", "allow_private_destinations",
     "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
-    "auto_backup_enabled",
+    "auto_backup_enabled", "userbot_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
     "fragment_packets": 32, "fragment_length": 32, "fragment_interval": 32,
     "panel_name": 40, "telegram_contact": 200,
     "telegram_bot_token": 100, "telegram_chat_id": 40,
+    "userbot_token": 100,
 }
 # Numeric settings: name -> (min, max)
 INT_SETTINGS = {
@@ -1103,7 +1227,8 @@ async def api_update_settings(request: Request, user: str = Depends(require_auth
                     raise HTTPException(400, "invalid-ota-repo")
             if k == "telegram_contact" and v and not v.startswith(("http://", "https://")):
                 v = f"https://t.me/{v.lstrip('@')}"
-            if k == "telegram_bot_token" and v and not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", v):
+            if k in ("telegram_bot_token", "userbot_token") and v \
+                    and not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", v):
                 raise HTTPException(400, "invalid-bot-token")
             clean[k] = v
 
@@ -1761,14 +1886,32 @@ def active_endpoints(db) -> list:
     return sorted(eps, key=lambda e: (e.get("sort", 0), e.get("name", "")))
 
 
+def build_configs_for_origin(db, ib, origin: str) -> list:
+    """Configs for a caller that has no Request (the bot).
+
+    Falls back to the endpoint list, which is request-independent; the origin
+    only matters for the subscription URL itself.
+    """
+    host, _port = _split_host_port(origin) if origin else ("", None)
+    return _build_configs(db, ib, host or public_host_fallback(db))
+
+
+def public_host_fallback(db) -> str:
+    domain = ((db.get("settings") or {}).get("public_domain") or "").strip()
+    return _split_host_port(domain)[0] if domain else ""
+
+
 def build_configs(request: Request, db, ib) -> list:
     """Every config this user should receive, one per enabled entry point.
 
     With no endpoints configured this returns exactly the single config the
     panel produced before, so existing subscriptions are unaffected.
     """
+    return _build_configs(db, ib, public_host(request, db))
+
+
+def _build_configs(db, ib, default_host: str) -> list:
     settings = db.get("settings") or {}
-    default_host = public_host(request, db)
     panel = brand(db)["panel_name"]
     path = f"/ws/{ib['uid']}"
     default_fp = ib.get("fp") or settings.get("default_fingerprint", "chrome")
@@ -2157,6 +2300,48 @@ async def api_restore(request: Request, user: str = Depends(require_auth)):
     resp = JSONResponse({"ok": True, "inbounds": len(incoming["inbounds"])})
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
+
+
+# ------------------------------------------------------------------ user bot
+@app.get("/api/userbot")
+async def api_userbot_status(user: str = Depends(require_auth)):
+    db = await store.get()
+    settings = db.get("settings") or {}
+    token = (settings.get("userbot_token") or "").strip()
+    return {
+        "enabled": bool(settings.get("userbot_enabled")),
+        "configured": bool(token),
+        "bound_users": len(db.get("bot_bindings") or {}),
+        "public_domain_set": bool(_bot_origin(db)),
+    }
+
+
+@app.post("/api/userbot/test")
+async def api_userbot_test(user: str = Depends(require_auth)):
+    db = await store.get()
+    token = ((db.get("settings") or {}).get("userbot_token") or "").strip()
+    if not token:
+        raise HTTPException(400, "not-configured")
+    try:
+        me = await userbot.get_me(token)
+    except userbot.UserBotError as e:
+        raise HTTPException(502, f"telegram: {e}")
+    return {"ok": True, "username": me.get("username"), "name": me.get("first_name")}
+
+
+@app.post("/api/userbot/unbind/{uid}")
+async def api_userbot_unbind(uid: str, user: str = Depends(require_auth)):
+    """Detach every chat bound to a subscription, e.g. after reselling it."""
+    removed = {"n": 0}
+
+    def _apply(db):
+        bindings = db.get("bot_bindings") or {}
+        for chat in [c for c, u in bindings.items() if u == uid]:
+            bindings.pop(chat, None)
+            removed["n"] += 1
+
+    await store.mutate(_apply)
+    return {"ok": True, "removed": removed["n"]}
 
 
 # ------------------------------------------------------------------ off-box backup

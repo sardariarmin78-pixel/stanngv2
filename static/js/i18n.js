@@ -363,4 +363,17 @@ window.I18N = {
   tgbk_ephemeral_title: { fa: "دیسک این سرور موقتی است", en: "This server's disk is ephemeral" },
   tgbk_ephemeral_body: { fa: "با هر ری‌دیپلوی، دیتابیس پاک می‌شود و پنل به صفحه راه‌اندازی برمی‌گردد. پشتیبان خودکار را روشن کنید.", en: "Every redeploy wipes the database and the panel returns to the setup screen. Turn automatic backup on." },
   tgbk_bootstrap_hint: { fa: "برای بازگردانی خودکار بعد از ری‌دیپلوی، توکن ربات و آیدی چت را به‌عنوان متغیر محیطی PEYK_TELEGRAM_BOT_TOKEN و PEYK_TELEGRAM_CHAT_ID هم در سرور ست کنید — تنظیمات داخل دیتابیس بعد از پاک شدن در دسترس نیست.", en: "For unattended recovery after a redeploy, also set the bot token and chat id as PEYK_TELEGRAM_BOT_TOKEN and PEYK_TELEGRAM_CHAT_ID environment variables - settings stored in the database are exactly what is gone." },
+  // ---- v2.2.0: user bot ----
+  ub_title: { fa: "ربات کاربران", en: "User bot" },
+  ub_on: { fa: "روشن", en: "On" },
+  ub_off: { fa: "خاموش", en: "Off" },
+  ub_enable: { fa: "فعال بودن ربات", en: "Bot enabled" },
+  ub_token: { fa: "توکن ربات کاربران", en: "User bot token" },
+  ub_token_hint: { fa: "با ربات هشدارها فرق دارد؛ یک ربات جدا در BotFather بسازید.", en: "Separate from the alerts bot - create a second bot in BotFather." },
+  ub_hint: { fa: "یک ربات جدا برای مشتری‌ها. کاربر با دستور /bind کد اشتراکش را وصل می‌کند و بعد خودش حجم و کانفیگش را می‌گیرد بدون اینکه به شما پیام بدهد. این ربات فقط می‌تواند بخواند — هیچ دستوری برای ساخت، تمدید یا حذف ندارد.", en: "A separate bot for your customers. A user binds their subscription code once with /bind, then checks their own usage and config without messaging you. It is read-only: there is no command to create, renew or delete anything." },
+  ub_test: { fa: "بررسی اتصال", en: "Check connection" },
+  ub_connected: { fa: "ربات {name} متصل است", en: "Connected to {name}" },
+  ub_no_token: { fa: "اول توکن ربات را ذخیره کنید", en: "Save the bot token first" },
+  ub_bound_users: { fa: "{n} کاربر وصل شده", en: "{n} users bound" },
+  ub_needs_domain: { fa: "تا وقتی «دامنه عمومی» در تنظیمات پر نشود، ربات نمی‌تواند لینک اشتراک بدهد.", en: "Until Public domain is set in Settings, the bot cannot hand out subscription links." },
 };
