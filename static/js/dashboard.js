@@ -853,6 +853,8 @@
       $('linkSub').textContent = r.sub_url || '';
       $('linkStatus').textContent = r.status_url || '';
       $('linkSubJson').textContent = r.sub_json_url || '';
+      $('linkSubClash').textContent = r.sub_url ? `${r.sub_url}?format=clash` : '';
+      $('linkSubSingbox').textContent = r.sub_url ? `${r.sub_url}?format=singbox` : '';
       $('qrImg').src = `/api/inbounds/${uid}/qr?t=${Date.now()}`;
       const ib = inbounds.find(x => x.uid === uid);
       const ips = (ib && ib.active_ips) || [];

@@ -345,4 +345,7 @@ window.I18N = {
   ep_address_required: { fa: "آدرس را وارد کنید", en: "Address is required" },
   ep_bad_address: { fa: "آدرس معتبر نیست", en: "That address is not valid" },
   ep_limit: { fa: "به سقف تعداد لوکیشن رسیدید", en: "Location limit reached" },
+  // ---- v1.9.0: multi-format subscriptions ----
+  sub_formats: { fa: "لینک اشتراک برای کلاینت‌های دیگر", en: "Subscription links for other clients" },
+  sub_formats_hint: { fa: "لینک اصلی بالا خودش کلاینت را تشخیص می‌دهد؛ این‌ها برای وقتی است که بخواهید فرمت را دستی مشخص کنید. در Clash و sing-box یک گروه «Auto» ساخته می‌شود که خودکار کم‌تأخیرترین لوکیشن را انتخاب می‌کند.", en: "The main link above detects the client automatically; these are for pinning a format by hand. Clash and sing-box get an “Auto” group that picks the lowest-latency location on its own." },
 };
