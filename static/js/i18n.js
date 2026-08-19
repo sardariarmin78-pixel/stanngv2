@@ -1,12 +1,12 @@
 /* ===========================================================
-   StanNG — bilingual dictionary (fa / en) v1.5.0
+   Peyk — bilingual dictionary (fa / en) v1.5.0
    Removed: Clean IP, Non-TLS, dummy "info configs"
    Added: renew, backup/restore, branding, relay safety,
           per-limit status reasons
    =========================================================== */
 window.I18N = {
   // ---- brand / generic ----
-  brand_name: { fa: 'StanNG', en: 'StanNG' },
+  brand_name: { fa: 'Peyk', en: 'Peyk' },
   brand_tagline: { fa: 'دروازه‌ی نامرئی به دنیای شبکه', en: 'The invisible gateway to the wizarding net' },
   loading: { fa: 'در حال بارگذاری...', en: 'Loading...' },
   save: { fa: 'ذخیره', en: 'Save' },
@@ -58,7 +58,7 @@ window.I18N = {
   nav_support: { fa: 'پشتیبانی تلگرام', en: 'Telegram Support' },
 
   // ---- dashboard ----
-  dash_welcome: { fa: 'به قلمرو StanNG خوش آمدید', en: 'Welcome to the StanNG realm' },
+  dash_welcome: { fa: 'خوش آمدید', en: 'Welcome' },
   dash_cpu: { fa: 'پردازنده', en: 'CPU' },
   dash_ram: { fa: 'حافظه', en: 'Memory' },
   dash_uptime: { fa: 'زمان فعالیت', en: 'Uptime' },
@@ -113,11 +113,7 @@ window.I18N = {
   // حذف inb_link_nontls, inb_link_addresses
   inb_sub_note: {
     fa: 'حجم و تاریخ انقضا از طریق هدر استاندارد Subscription-Userinfo داخل کلاینت نمایش داده می‌شود.',
-    en: 'The subscription link includes two display-only configs (usage status and free message) plus the TLS config.'
-  },
-  inb_info_configs_note: {
-    fa: 'لینک اشتراک به‌صورت متن ساده (Plain Text) ارائه می‌شود و شامل موارد زیر است:\n📊 یک کانفیگ نمایشی برای نمایش وضعیت مصرف و اعتبار\n❤️ یک کانفیگ نمایشی با پیام «StanNG is Free ❤️»\n🔗 یک کانفیگ TLS واقعی برای اتصال',
-    en: 'The subscription link is provided as plain text and includes:\n📊 A display-only config showing usage and expiry status\n❤️ A display-only config with "StanNG is Free ❤️" message\n🔗 A real TLS config for connection'
+    en: 'Usage and expiry are shown natively in the client via the standard Subscription-Userinfo header.'
   },
   inb_empty: { fa: 'هنوز کاربری اضافه نشده است', en: 'No users added yet' },
   inb_active_devices: { fa: 'دستگاه فعال', en: 'active devices' },

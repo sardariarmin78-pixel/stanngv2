@@ -1,11 +1,11 @@
 /* ===========================================================
-   StanNG — first-run admin setup controller.
+   Peyk — first-run admin setup controller.
    Extracted from an inline <script> so the panel can ship a
    strict script-src CSP.
    =========================================================== */
 (() => {
-  STANNG.initLangThemeToggles();
-  STANNG.initPasswordToggles();
+  PEYK.initLangThemeToggles();
+  PEYK.initPasswordToggles();
 
   fetch('/api/setup-status')
     .then(r => r.json())
@@ -26,22 +26,22 @@
 
     if (password !== password2) {
       mismatchEl.classList.add('show');
-      STANNG.shake(form);
-      STANNG.playSfx('error');
+      PEYK.shake(form);
+      PEYK.playSfx('error');
       return;
     }
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      await STANNG.api('/api/setup', { method: 'POST', body: { username, password } });
-      STANNG.toast(STANNG.t('setup_done'), 'success');
+      await PEYK.api('/api/setup', { method: 'POST', body: { username, password } });
+      PEYK.toast(PEYK.t('setup_done'), 'success');
       setTimeout(() => { window.location.href = '/dashboard'; }, 700);
     } catch (err) {
-      STANNG.setLoading(btn, false);
-      STANNG.shake(form);
+      PEYK.setLoading(btn, false);
+      PEYK.shake(form);
       let msg = err.detail || 'error';
-      if (msg === 'invalid-username') msg = STANNG.t('setup_username_hint');
-      else if (msg === 'weak-password') msg = STANNG.t('setup_password_hint');
-      STANNG.toast(msg, 'error');
+      if (msg === 'invalid-username') msg = PEYK.t('setup_username_hint');
+      else if (msg === 'weak-password') msg = PEYK.t('setup_password_hint');
+      PEYK.toast(msg, 'error');
     }
   });
 })();

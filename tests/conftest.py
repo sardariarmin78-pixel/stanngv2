@@ -11,8 +11,8 @@ import sys
 import tempfile
 
 # Must be set before `storage` is imported, or DATA_DIR binds to the real one.
-os.environ.setdefault("STANNG_DATA_DIR", tempfile.mkdtemp(prefix="stanng_tests_"))
-os.environ.setdefault("STANNG_PANEL_NAME", "TestPanel")
+os.environ.setdefault("PEYK_DATA_DIR", tempfile.mkdtemp(prefix="peyk_tests_"))
+os.environ.setdefault("PEYK_PANEL_NAME", "TestPanel")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

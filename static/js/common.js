@@ -1,10 +1,10 @@
 /* ===========================================================
-   StanNG — shared front-end utilities
+   Peyk — shared front-end utilities
    (i18n dictionary, theme/lang persistence, toasts, sounds,
    ripple effect, small fetch helper). No external CDN deps.
    =========================================================== */
 
-const STANNG = (() => {
+const PEYK = (() => {
   const SFX = {
     click: '/static/sfx/click.ogg',
     success: '/static/sfx/success.ogg',
@@ -15,7 +15,7 @@ const STANNG = (() => {
     close: '/static/sfx/close.ogg',
   };
   const audioCache = {};
-  let soundEnabled = localStorage.getItem('stanng_sound') !== 'off';
+  let soundEnabled = localStorage.getItem('peyk_sound') !== 'off';
 
   function playSfx(name, vol = 0.5) {
     if (!soundEnabled) return;
@@ -38,22 +38,22 @@ const STANNG = (() => {
 
   function setSoundEnabled(v) {
     soundEnabled = v;
-    localStorage.setItem('stanng_sound', v ? 'on' : 'off');
+    localStorage.setItem('peyk_sound', v ? 'on' : 'off');
   }
   function isSoundEnabled() { return soundEnabled; }
 
   // ---------------- theme ----------------
-  function getTheme() { return localStorage.getItem('stanng_theme') || 'dark'; }
+  function getTheme() { return localStorage.getItem('peyk_theme') || 'dark'; }
   function setTheme(t) {
-    localStorage.setItem('stanng_theme', t);
+    localStorage.setItem('peyk_theme', t);
     document.documentElement.setAttribute('data-theme', t);
   }
   function applyStoredTheme() { setTheme(getTheme()); }
 
   // ---------------- lang ----------------
-  function getLang() { return localStorage.getItem('stanng_lang') || 'fa'; }
+  function getLang() { return localStorage.getItem('peyk_lang') || 'fa'; }
   function setLang(l) {
-    localStorage.setItem('stanng_lang', l);
+    localStorage.setItem('peyk_lang', l);
     document.documentElement.setAttribute('lang', l);
     document.documentElement.setAttribute('dir', l === 'fa' ? 'rtl' : 'ltr');
     document.body.classList.toggle('lang-en', l === 'en');
@@ -266,12 +266,12 @@ const STANNG = (() => {
 })();
 
 document.addEventListener('DOMContentLoaded', () => {
-  STANNG.applyStoredTheme();
-  document.documentElement.setAttribute('lang', STANNG.getLang());
-  document.documentElement.setAttribute('dir', STANNG.getLang() === 'fa' ? 'rtl' : 'ltr');
-  document.body.classList.toggle('lang-en', STANNG.getLang() === 'en');
-  STANNG.translatePage();
-  STANNG.initRipples();
+  PEYK.applyStoredTheme();
+  document.documentElement.setAttribute('lang', PEYK.getLang());
+  document.documentElement.setAttribute('dir', PEYK.getLang() === 'fa' ? 'rtl' : 'ltr');
+  document.body.classList.toggle('lang-en', PEYK.getLang() === 'en');
+  PEYK.translatePage();
+  PEYK.initRipples();
   const field = document.querySelector('.sparkle-field');
-  if (field) STANNG.initSparkles(field);
+  if (field) PEYK.initSparkles(field);
 });

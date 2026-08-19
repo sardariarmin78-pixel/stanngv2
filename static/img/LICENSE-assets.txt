@@ -1,12 +1,13 @@
-favicon.svg is an original mark drawn for this project as inline SVG paths
-(a shield with a signal trace). It contains no third-party trademarks,
-crests, or characters, and no AI-generated raster artwork.
+favicon.svg is an original mark drawn for this project as inline SVG paths:
+a courier in flight, which also reads as an upward arrow. It contains no
+third-party trademarks, crests, or characters, and no AI-generated raster
+artwork.
 
 The same mark is defined as `#brand-mark` in templates/_icons.html so the UI
 can render it at any size in the current accent colour.
 
-Both are covered by the repository's MIT licence — see /LICENSE.
+Both are covered by the repository's MIT licence - see /LICENSE.
 
 The upstream project's raster artwork (logo-square.png, hero-bg.jpg,
 favicon-32.png, favicon-180.png) was removed in the 1.6.0 redesign and is no
-longer referenced anywhere.
+longer referenced.

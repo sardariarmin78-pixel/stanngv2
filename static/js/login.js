@@ -6,8 +6,8 @@
    front, so a panel without 2FA looks unchanged.
    =========================================================== */
 (() => {
-  STANNG.initLangThemeToggles();
-  STANNG.initPasswordToggles();
+  PEYK.initLangThemeToggles();
+  PEYK.initPasswordToggles();
 
   const form = document.getElementById('loginForm');
   const btn = document.getElementById('loginBtn');
@@ -22,7 +22,7 @@
     awaitingCode = true;
     step1.style.display = 'none';
     step2.style.display = '';
-    btn.querySelector('span').textContent = STANNG.t('twofa_verify');
+    btn.querySelector('span').textContent = PEYK.t('twofa_verify');
     codeInput.value = '';
     codeInput.focus();
   }
@@ -31,7 +31,7 @@
     awaitingCode = false;
     step1.style.display = '';
     step2.style.display = 'none';
-    btn.querySelector('span').textContent = STANNG.t('login_btn');
+    btn.querySelector('span').textContent = PEYK.t('login_btn');
   }
 
   form.addEventListener('submit', async (e) => {
@@ -41,32 +41,32 @@
     const body = { username, password };
     if (awaitingCode) body.code = codeInput.value.trim();
 
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      const res = await STANNG.api('/api/login', { method: 'POST', body });
+      const res = await PEYK.api('/api/login', { method: 'POST', body });
       if (res && res.twofa_required) {
         // Password accepted; the account also has TOTP enabled.
-        STANNG.setLoading(btn, false);
+        PEYK.setLoading(btn, false);
         askForCode();
         return;
       }
-      STANNG.toast(STANNG.t('login_success'), 'success');
+      PEYK.toast(PEYK.t('login_success'), 'success');
       if (res && res.recovery_remaining === 0) {
-        STANNG.toast(STANNG.t('twofa_no_recovery_left'), 'info', 7000);
+        PEYK.toast(PEYK.t('twofa_no_recovery_left'), 'info', 7000);
       }
       setTimeout(() => { window.location.href = '/dashboard'; }, 450);
     } catch (err) {
-      STANNG.setLoading(btn, false);
-      STANNG.shake(form);
+      PEYK.setLoading(btn, false);
+      PEYK.shake(form);
       const detail = err.detail || '';
-      let msg = awaitingCode ? STANNG.t('twofa_invalid') : STANNG.t('login_failed');
+      let msg = awaitingCode ? PEYK.t('twofa_invalid') : PEYK.t('login_failed');
       if (detail.startsWith('locked:')) {
         const secs = parseInt(detail.split(':')[1], 10);
-        msg = STANNG.t('login_locked');
+        msg = PEYK.t('login_locked');
         if (!isNaN(secs)) msg += ` (${Math.ceil(secs / 60)}m)`;
         backToCredentials();
       }
-      STANNG.toast(msg, 'error');
+      PEYK.toast(msg, 'error');
       if (awaitingCode) codeInput.select();
     }
   });
