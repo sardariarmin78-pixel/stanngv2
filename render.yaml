@@ -14,4 +14,9 @@ services:
       # Render terminates TLS at its own router: exactly one trusted hop.
       - key: PEYK_PROXY_HOPS
         value: 1
+      # Render's free tier gives a fraction of a vCPU; worker
+      # auto-detection already handles that, but pinning it makes
+      # the intent explicit.
+      - key: PEYK_WORKERS
+        value: 1
     autoDeploy: true

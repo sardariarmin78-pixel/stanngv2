@@ -277,10 +277,73 @@ def test_cleanup_removes_all_journals(tmp_path):
 
 # ------------------------------------------------------------------ worker count
 @pytest.mark.parametrize("setting,cores,expected", [
-    ("auto", 1, 1), ("auto", 4, 4), ("auto", 32, 8),   # capped
+    # "auto" below two effective cores stays single-process: on a fraction of
+    # a vCPU, extra workers only add memory and startup time, and a slow start
+    # is what makes a platform report that no port was exposed.
+    ("auto", 0.25, 1), ("auto", 0.5, 1), ("auto", 1, 1), ("auto", 1.9, 1),
+    ("auto", 2, 2), ("auto", 4, 4), ("auto", 8, 8), ("auto", 32, 8),
     (None, 8, 8), ("", 8, 8),
-    ("1", 8, 1), ("3", 8, 3), ("999", 8, 32), ("0", 8, 1), ("-5", 8, 1),
-    ("garbage", 8, 1),
+    # An explicit number is always honoured, even on a small container.
+    ("1", 8, 1), ("3", 8, 3), ("4", 0.5, 4),
+    ("999", 8, 32), ("0", 8, 1), ("-5", 8, 1), ("garbage", 8, 1),
 ])
 def test_resolve_workers(setting, cores, expected):
     assert cluster.resolve_workers(setting, cpu_count=cores) == expected
+
+
+# ------------------------------------------------------------------ cgroup
+def _quota(tmp_path, monkeypatch, files):
+    """Point the cgroup reader at fixture files instead of the real ones."""
+    real_open = cluster._read_first
+
+    def fake(path):
+        return files.get(path, None)
+
+    monkeypatch.setattr(cluster, "_read_first", fake)
+    try:
+        return cluster.cgroup_cpu_quota()
+    finally:
+        monkeypatch.setattr(cluster, "_read_first", real_open)
+
+
+def test_cgroup_v2_quota(tmp_path, monkeypatch):
+    """Half a vCPU is the shape Railway-style platforms actually hand out."""
+    assert _quota(tmp_path, monkeypatch, {"/sys/fs/cgroup/cpu.max": "50000 100000"}) == 0.5
+    assert _quota(tmp_path, monkeypatch, {"/sys/fs/cgroup/cpu.max": "200000 100000"}) == 2.0
+
+
+def test_cgroup_v2_unrestricted(tmp_path, monkeypatch):
+    assert _quota(tmp_path, monkeypatch, {"/sys/fs/cgroup/cpu.max": "max 100000"}) is None
+
+
+def test_cgroup_v1_quota(tmp_path, monkeypatch):
+    assert _quota(tmp_path, monkeypatch, {
+        "/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "25000",
+        "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000",
+    }) == 0.25
+
+
+def test_cgroup_v1_unrestricted(tmp_path, monkeypatch):
+    assert _quota(tmp_path, monkeypatch, {
+        "/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "-1",
+        "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000",
+    }) is None
+
+
+def test_cgroup_absent_or_malformed(tmp_path, monkeypatch):
+    assert _quota(tmp_path, monkeypatch, {}) is None
+    assert _quota(tmp_path, monkeypatch, {"/sys/fs/cgroup/cpu.max": "garbage"}) is None
+    assert _quota(tmp_path, monkeypatch, {"/sys/fs/cgroup/cpu.max": "abc def"}) is None
+
+
+def test_available_cpus_never_zero(monkeypatch):
+    """A pathological reading must not disable the server entirely."""
+    monkeypatch.setattr(cluster, "cgroup_cpu_quota", lambda: 0.0)
+    assert cluster.available_cpus() > 0
+    assert cluster.resolve_workers("auto") >= 1
+
+
+def test_available_cpus_takes_the_smallest_constraint(monkeypatch):
+    monkeypatch.setattr(cluster, "cgroup_cpu_quota", lambda: 0.5)
+    monkeypatch.setattr(cluster.os, "cpu_count", lambda: 64)
+    assert cluster.available_cpus() == 0.5
