@@ -1873,11 +1873,18 @@ async def api_test_endpoint(endpoint_id: str, user: str = Depends(require_auth))
     if host_header:
         headers["Host"] = host_header
 
+    # Send the SNI the client will send. Cloudflare happens to route on the
+    # Host header regardless, but a domain-fronting setup where SNI and Host
+    # deliberately differ is exactly the case where a probe using the bare IP
+    # as SNI would miss an SNI-specific block.
+    sni = (ep.get("sni") or "").strip() or host_header
+    extensions = {"sni_hostname": sni} if sni else {}
+
     ok, latency, detail = False, None, ""
     started = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-            r = await client.get(url, headers=headers)
+            r = await client.get(url, headers=headers, extensions=extensions)
         latency = int((time.perf_counter() - started) * 1000)
         ok = r.status_code == 200
         detail = f"HTTP {r.status_code}"
