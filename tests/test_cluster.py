@@ -347,3 +347,53 @@ def test_available_cpus_takes_the_smallest_constraint(monkeypatch):
     monkeypatch.setattr(cluster, "cgroup_cpu_quota", lambda: 0.5)
     monkeypatch.setattr(cluster.os, "cpu_count", lambda: 64)
     assert cluster.available_cpus() == 0.5
+
+
+# ------------------------------------------------------------------ leader election
+def test_only_one_worker_becomes_leader(tmp_path):
+    """lifespan runs in every worker. Without election, each would send its
+    own copy of every alert and upload its own backup."""
+    path = str(tmp_path / "leader.lock")
+    workers = [cluster.LeaderLock(path) for _ in range(5)]
+    elected = [w for w in workers if w.try_acquire()]
+    assert len(elected) == 1
+    assert sum(w.is_leader() for w in workers) == 1
+
+
+def test_leadership_is_stable_across_polls(tmp_path):
+    """The leader must not hand off just because others keep asking."""
+    path = str(tmp_path / "leader.lock")
+    a, b = cluster.LeaderLock(path), cluster.LeaderLock(path)
+    assert a.try_acquire() is True
+    for _ in range(5):
+        assert b.try_acquire() is False
+        assert a.try_acquire() is True
+
+
+def test_leadership_passes_on_when_the_leader_goes_away(tmp_path):
+    path = str(tmp_path / "leader.lock")
+    a, b = cluster.LeaderLock(path), cluster.LeaderLock(path)
+    assert a.try_acquire() is True
+    assert b.try_acquire() is False
+    a.release()                      # worker dies / shuts down
+    assert b.try_acquire() is True
+    assert a.try_acquire() is False  # and does not reclaim it
+
+
+def test_single_process_is_always_leader(monkeypatch):
+    """No election object means one process, which owns everything."""
+    import main
+    monkeypatch.setitem(main.runtime, "leader", None)
+    assert main._is_leader() is True
+
+
+def test_multiworker_defers_to_the_lock(tmp_path, monkeypatch):
+    import main
+    path = str(tmp_path / "leader.lock")
+    held = cluster.LeaderLock(path)
+    assert held.try_acquire() is True
+    try:
+        monkeypatch.setitem(main.runtime, "leader", cluster.LeaderLock(path))
+        assert main._is_leader() is False
+    finally:
+        held.release()

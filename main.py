@@ -132,11 +132,26 @@ runtime = {
     "colo": {"value": None, "at": 0.0},
     # Set in lifespan when running multi-worker; None means single process.
     "journal": None,
+    # Elects one worker for cluster-wide jobs (alerts, backups, keep-alive).
+    "leader": None,
 }
 
 
 def _journal():
     return runtime["journal"]
+
+
+def _is_leader() -> bool:
+    """True when this worker should run cluster-wide singleton jobs.
+
+    Single-process mode is always the leader. Multi-worker mode elects one,
+    otherwise every worker would send its own copy of each alert and upload
+    its own backup.
+    """
+    leader = runtime["leader"]
+    if leader is None:
+        return True
+    return leader.try_acquire()
 
 
 def merged_connection_count(uid: str) -> int:
@@ -166,6 +181,7 @@ async def lifespan(app: FastAPI):
     if MULTIPROCESS:
         store.enable_multiprocess()
         runtime["journal"] = cluster.RuntimeJournal(RUNTIME_DIR)
+        runtime["leader"] = cluster.LeaderLock(os.path.join(RUNTIME_DIR, "leader.lock"))
 
     # Before anything serves traffic: if this container came up with a blank
     # disk and we have bootstrap credentials, pull the last backup back.
@@ -197,6 +213,8 @@ async def lifespan(app: FastAPI):
         j = _journal()
         if j is not None:
             j.remove()
+        if runtime["leader"] is not None:
+            runtime["leader"].release()
 
 
 app = FastAPI(title=DEFAULT_PANEL_NAME, version=APP_VERSION, lifespan=lifespan)
@@ -653,6 +671,8 @@ async def _notify_loop():
     while True:
         try:
             await asyncio.sleep(NOTIFY_INTERVAL)
+            if not _is_leader():
+                continue
             db = await store.get()
             token, chat, _ = _notify_config(db)
             if not token:
@@ -744,6 +764,8 @@ async def _backup_loop():
     while True:
         try:
             await asyncio.sleep(BACKUP_CHECK_INTERVAL)
+            if not _is_leader():
+                continue
             db = await store.get()
             settings = db.get("settings") or {}
             if not settings.get("auto_backup_enabled"):
@@ -779,6 +801,8 @@ async def _keep_alive_loop():
     while True:
         try:
             await asyncio.sleep(600)
+            if not _is_leader():
+                continue
             db = await store.get()
             settings = db.get("settings") or {}
             if not settings.get("keep_alive", True):
