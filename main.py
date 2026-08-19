@@ -11,6 +11,7 @@ Version 1.6.0
   * TOTP two-factor auth, Telegram alerts, configurable branding
 """
 import asyncio
+import base64
 import io
 import os
 import re
@@ -42,7 +43,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 
 
 def _env_str(name: str, default: str) -> str:
@@ -1499,22 +1500,18 @@ async def api_inbound_history(uid: str, user: str = Depends(require_auth)):
 
 
 # ------------------------------------------------------------------ link building
-def build_links(request: Request, db, ib) -> dict:
-    """Build the VLESS-over-WS TLS link for an inbound.
+def _vless_link(ib, address: str, port: int, path: str, sni: str, fp: str,
+                alpn: str, settings: dict, remark: str, host_header: str = "") -> str:
+    """One VLESS-over-WS URL.
 
-    path and alpn keep '/' and ',' unescaped: percent-encoding them is what
-    made v2rayNG reject these links before 1.4.1.
+    `address` is what the client dials; `host_header` is the Host the reverse
+    proxy needs to route on, which differs whenever the client dials a bare
+    CDN IP. path and alpn keep '/' and ',' unescaped: percent-encoding them
+    is what made v2rayNG reject these links before 1.4.1.
     """
-    settings = db.get("settings") or {}
-    host = public_host(request, db)
-    fp = ib.get("fp") or settings.get("default_fingerprint", "chrome")
-    alpn = settings.get("default_alpn", "http/1.1")
-    sni = (settings.get("sni_override") or "").strip() or host
-    path = f"/ws/{ib['uid']}"
-
     params = [
         "encryption=none", "security=tls", "type=ws",
-        f"host={quote(host)}",
+        f"host={quote(host_header or address)}",
         f"path={quote(path, safe='/')}",
         f"sni={quote(sni)}",
         f"fp={quote(fp)}",
@@ -1527,10 +1524,85 @@ def build_links(request: Request, db, ib) -> dict:
         length = (settings.get("fragment_length") or "10-30").strip()
         interval = (settings.get("fragment_interval") or "10-20").strip()
         params.append(f"fragment={quote(f'{packets},{length},{interval}')}")
+    return f"vless://{ib['uuid']}@{address}:{port}?{'&'.join(params)}#{quote(remark)}"
 
-    remark = f"{brand(db)['panel_name']}-{ib['name']}"
-    link_tls = f"vless://{ib['uuid']}@{host}:443?{'&'.join(params)}#{quote(remark)}"
-    return {"tls": link_tls, "remark": remark}
+
+def active_endpoints(db) -> list:
+    eps = [e for e in db.get("endpoints", []) if e.get("enabled", True) and e.get("address")]
+    return sorted(eps, key=lambda e: (e.get("sort", 0), e.get("name", "")))
+
+
+def build_configs(request: Request, db, ib) -> list:
+    """Every config this user should receive, one per enabled entry point.
+
+    With no endpoints configured this returns exactly the single config the
+    panel produced before, so existing subscriptions are unaffected.
+    """
+    settings = db.get("settings") or {}
+    default_host = public_host(request, db)
+    panel = brand(db)["panel_name"]
+    path = f"/ws/{ib['uid']}"
+    default_fp = ib.get("fp") or settings.get("default_fingerprint", "chrome")
+    default_alpn = settings.get("default_alpn", "http/1.1")
+
+    eps = active_endpoints(db)
+    if not eps:
+        sni = (settings.get("sni_override") or "").strip() or default_host
+        remark = f"{panel}-{ib['name']}"
+        return [{
+            "name": "", "remark": remark, "address": default_host, "port": 443,
+            "link": _vless_link(ib, default_host, 443, path, sni,
+                                default_fp, default_alpn, settings, remark),
+        }]
+
+    out = []
+    for ep in eps:
+        address = str(ep.get("address") or "").strip()
+        # The Host header must keep naming the deployment even when the client
+        # dials a bare CDN IP, otherwise the reverse proxy cannot route it.
+        host_header = (ep.get("host") or "").strip() or default_host
+        sni = (ep.get("sni") or "").strip() or (settings.get("sni_override") or "").strip() or host_header
+        try:
+            port = int(ep.get("port") or 443)
+        except (TypeError, ValueError):
+            port = 443
+        fp = (ep.get("fp") or "").strip() or default_fp
+        alpn = (ep.get("alpn") or "").strip() or default_alpn
+        label = (ep.get("name") or address).strip()
+        remark = f"{panel}-{ib['name']}-{label}"
+        link = _vless_link(ib, address, port, path, sni, fp, alpn,
+                           settings, remark, host_header=host_header)
+        out.append({
+            "id": ep.get("id"), "name": label, "remark": remark,
+            "address": address, "port": port, "link": link,
+        })
+    return out
+
+
+def build_links(request: Request, db, ib) -> dict:
+    """Back-compatible shape: `tls` is the first (primary) config."""
+    configs = build_configs(request, db, ib)
+    return {
+        "tls": configs[0]["link"],
+        "remark": configs[0]["remark"],
+        "configs": configs,
+    }
+
+
+def header_safe_title(title: str) -> str:
+    """Encode a subscription title for an HTTP header.
+
+    Two traps here. Header values are latin-1 by spec, so a Persian name
+    raised UnicodeEncodeError and turned the whole subscription into a 500.
+    And characters that *are* latin-1 but not ASCII (ü, ·) encode fine yet
+    arrive as mojibake, because clients read these headers as UTF-8.
+
+    So the bar is plain ASCII; anything else goes out base64-encoded, which
+    is the form v2rayNG, Clash and Nekobox already understand.
+    """
+    if title.isascii():
+        return title
+    return "base64:" + base64.b64encode(title.encode("utf-8")).decode("ascii")
 
 
 def subscription_userinfo(ib) -> str:
@@ -1569,7 +1641,11 @@ async def api_inbound_qr(uid: str, request: Request, user: str = Depends(require
     ib = inbound_by_uid(db, uid)
     if not ib:
         raise HTTPException(404, "not-found")
-    target = build_links(request, db, ib)["tls"]
+    configs = build_configs(request, db, ib)
+    # With several routes a single config QR would pin the user to one of
+    # them; the subscription URL carries all of them and keeps updating.
+    target = (f"{public_origin(request, db)}/sub/{uid}"
+              if len(configs) > 1 else configs[0]["link"])
 
     def _render() -> bytes:
         img = qrcode.make(target, border=2)
@@ -1582,6 +1658,141 @@ async def api_inbound_qr(uid: str, request: Request, user: str = Depends(require
                              headers={"Cache-Control": "no-store"})
 
 
+# ------------------------------------------------------------------ endpoints
+MAX_ENDPOINTS = 30
+ADDRESS_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,253}$")
+
+
+def sanitize_endpoint(payload: dict) -> dict:
+    address = str(payload.get("address") or "").strip()
+    if not address or not ADDRESS_RE.match(address):
+        raise HTTPException(400, "invalid-address")
+    name = str(payload.get("name") or "").strip()[:40] or address
+    port = _as_number(payload.get("port") or 443, "port", 1, 65535, True)
+    fp = (payload.get("fp") or "").strip()
+    if fp and fp not in VALID_FINGERPRINTS:
+        raise HTTPException(400, "invalid-fp")
+    alpn = (payload.get("alpn") or "").strip()
+    if alpn and alpn not in VALID_ALPN:
+        raise HTTPException(400, "invalid-alpn")
+    return {
+        "name": name,
+        "address": address,
+        "port": port,
+        "sni": str(payload.get("sni") or "").strip()[:253],
+        "host": str(payload.get("host") or "").strip()[:253],
+        "fp": fp,
+        "alpn": alpn,
+        "enabled": bool(payload.get("enabled", True)),
+        "sort": _as_number(payload.get("sort") or 0, "sort", 0, 999, True),
+    }
+
+
+@app.get("/api/endpoints")
+async def api_list_endpoints(user: str = Depends(require_auth)):
+    db = await store.get()
+    return {"endpoints": db.get("endpoints", [])}
+
+
+@app.post("/api/endpoints")
+async def api_create_endpoint(request: Request, user: str = Depends(require_auth)):
+    payload = await _json_body(request)
+    fields = sanitize_endpoint(payload)
+    db = await store.get()
+    if len(db.get("endpoints", [])) >= MAX_ENDPOINTS:
+        raise HTTPException(400, "endpoint-limit-reached")
+    ep = {"id": gen_uid(), "node_url": "",
+          "health": {"ok": None, "ts": None, "latency_ms": None}}
+    ep.update(fields)
+
+    def _apply(db):
+        db.setdefault("endpoints", []).append(ep)
+
+    await store.mutate(_apply)
+    return {"ok": True, "endpoint": ep}
+
+
+@app.patch("/api/endpoints/{endpoint_id}")
+async def api_update_endpoint(endpoint_id: str, request: Request,
+                              user: str = Depends(require_auth)):
+    payload = await _json_body(request)
+    fields = sanitize_endpoint(payload)
+    result = {}
+
+    def _apply(db):
+        for ep in db.setdefault("endpoints", []):
+            if ep.get("id") == endpoint_id:
+                ep.update(fields)
+                result.update(ep)
+                return
+        raise HTTPException(404, "not-found")
+
+    await store.mutate(_apply)
+    return {"ok": True, "endpoint": result}
+
+
+@app.delete("/api/endpoints/{endpoint_id}")
+async def api_delete_endpoint(endpoint_id: str, user: str = Depends(require_auth)):
+    found = {"v": False}
+
+    def _apply(db):
+        eps = db.setdefault("endpoints", [])
+        before = len(eps)
+        db["endpoints"] = [e for e in eps if e.get("id") != endpoint_id]
+        found["v"] = len(db["endpoints"]) != before
+
+    await store.mutate(_apply)
+    if not found["v"]:
+        raise HTTPException(404, "not-found")
+    return {"ok": True}
+
+
+@app.post("/api/endpoints/{endpoint_id}/test")
+async def api_test_endpoint(endpoint_id: str, user: str = Depends(require_auth)):
+    """Reachability + latency for one entry point.
+
+    Hits /health through the endpoint's own address, which is what a client
+    would traverse, so a blocked or misrouted CDN IP shows up here rather
+    than in a user's complaint.
+    """
+    db = await store.get()
+    ep = next((e for e in db.get("endpoints", []) if e.get("id") == endpoint_id), None)
+    if not ep:
+        raise HTTPException(404, "not-found")
+
+    scheme = "https" if int(ep.get("port") or 443) != 80 else "http"
+    address = ep["address"]
+    if ":" in address and not address.startswith("["):
+        address = f"[{address}]"
+    url = f"{scheme}://{address}:{ep.get('port', 443)}/health"
+    headers = {}
+    host_header = (ep.get("host") or "").strip()
+    if host_header:
+        headers["Host"] = host_header
+
+    ok, latency, detail = False, None, ""
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+        latency = int((time.perf_counter() - started) * 1000)
+        ok = r.status_code == 200
+        detail = f"HTTP {r.status_code}"
+    except Exception as e:
+        detail = type(e).__name__
+        latency = int((time.perf_counter() - started) * 1000)
+
+    health = {"ok": ok, "ts": time.time(), "latency_ms": latency}
+
+    def _apply(db):
+        for e in db.get("endpoints", []):
+            if e.get("id") == endpoint_id:
+                e["health"] = health
+
+    await store.mutate(_apply, persist=False)
+    return {"ok": ok, "latency_ms": latency, "detail": detail, "health": health}
+
+
 # ------------------------------------------------------------------ subscriptions
 @app.get("/sub/{uid}")
 async def sub_plain(uid: str, request: Request):
@@ -1590,15 +1801,17 @@ async def sub_plain(uid: str, request: Request):
     ib = inbound_by_uid(db, uid)
     if not ib:
         raise HTTPException(404, "not-found")
-    links = build_links(request, db, ib)
+    configs = build_configs(request, db, ib)
     headers = {
         "Subscription-Userinfo": subscription_userinfo(ib),
         "Profile-Update-Interval": "12",
-        "Profile-Title": links["remark"],
+        "Profile-Title": header_safe_title(f"{brand(db)['panel_name']}-{ib['name']}"),
         "Content-Disposition": f'inline; filename="{uid}.txt"',
         "Cache-Control": "no-store",
     }
-    return PlainTextResponse(links["tls"], headers=headers)
+    # One line per entry point; clients list them as separate servers and the
+    # user picks (or auto-selects) whichever route is working for their ISP.
+    return PlainTextResponse("\n".join(c["link"] for c in configs), headers=headers)
 
 
 @app.get("/sub/{uid}/json")
@@ -1608,7 +1821,7 @@ async def sub_json(uid: str, request: Request):
     if not ib:
         raise HTTPException(404, "not-found")
     st = inbound_status(ib)
-    links = build_links(request, db, ib)
+    configs = build_configs(request, db, ib)
     return JSONResponse({
         "name": ib["name"],
         "uid": uid,
@@ -1618,7 +1831,7 @@ async def sub_json(uid: str, request: Request):
         "days_left": st["days_left"],
         "max_connections": ib.get("max_connections"),
         "active_connections": st["active_connections"],
-        "links": {"tls": links["tls"]},
+        "links": {"tls": configs[0]["link"], "configs": configs},
     }, headers={"Subscription-Userinfo": subscription_userinfo(ib), "Cache-Control": "no-store"})
 
 
