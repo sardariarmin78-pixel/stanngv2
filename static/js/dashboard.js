@@ -3,7 +3,7 @@
 
    Views: dashboard, users, plans, traffic, security,
    notifications, settings. All markup is built through
-   STANNG.escapeHtml — user- and API-supplied strings are never
+   PEYK.escapeHtml — user- and API-supplied strings are never
    interpolated raw into innerHTML.
    =========================================================== */
 (() => {
@@ -16,11 +16,11 @@
   const selected = new Set();
 
   const $ = (id) => document.getElementById(id);
-  const esc = STANNG.escapeHtml;
+  const esc = PEYK.escapeHtml;
   const DAY = 86400;
 
   // ---------------- session guard + settings hydrate ----------------
-  STANNG.api('/api/me').then(me => {
+  PEYK.api('/api/me').then(me => {
     if (!me.logged_in) { window.location.href = '/login'; return; }
     $('appVersion').textContent = me.app_version || '';
     $('otaCurrent').textContent = me.app_version || '-';
@@ -52,7 +52,7 @@
     applyFragmentFieldState();
   }).catch(() => { window.location.href = '/login'; });
 
-  $('settingSound').checked = STANNG.isSoundEnabled();
+  $('settingSound').checked = PEYK.isSoundEnabled();
 
   // ---------------- navigation ----------------
   const views = document.querySelectorAll('.view');
@@ -68,13 +68,13 @@
     views.forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
     navItems.forEach(n => n.classList.toggle('active', n.dataset.view === name));
     viewTitle.setAttribute('data-i18n', titleKeys[name]);
-    viewTitle.textContent = STANNG.t(titleKeys[name]);
+    viewTitle.textContent = PEYK.t(titleKeys[name]);
     if (name === 'inbounds' || name === 'traffic') loadInbounds();
     if (name === 'plans') loadPlans();
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security') { loadTwofaStatus(); loadLoginLog(); }
     closeSidebarMobile();
-    STANNG.playSfx('open', 0.25);
+    PEYK.playSfx('open', 0.25);
   }
   navItems.forEach(item => item.addEventListener('click', () => showView(item.dataset.view)));
 
@@ -95,32 +95,32 @@
   // ---------------- lang / theme / sound ----------------
   document.querySelectorAll('.lang-toggle button').forEach(b => {
     b.addEventListener('click', () => {
-      STANNG.setLang(b.dataset.lang);
-      viewTitle.textContent = STANNG.t(viewTitle.getAttribute('data-i18n'));
+      PEYK.setLang(b.dataset.lang);
+      viewTitle.textContent = PEYK.t(viewTitle.getAttribute('data-i18n'));
       renderInbounds(); renderTrafficTable(); renderPlans();
-      STANNG.playSfx('toggle', 0.25);
+      PEYK.playSfx('toggle', 0.25);
     });
   });
   $('themeToggle').addEventListener('click', () => {
-    STANNG.setTheme(STANNG.getTheme() === 'dark' ? 'light' : 'dark');
-    STANNG.playSfx('toggle', 0.25);
+    PEYK.setTheme(PEYK.getTheme() === 'dark' ? 'light' : 'dark');
+    PEYK.playSfx('toggle', 0.25);
     renderTrafficChart($('trafficChart'), lastHourly);
   });
   $('soundToggle').addEventListener('click', () => {
-    const next = !STANNG.isSoundEnabled();
-    STANNG.setSoundEnabled(next);
+    const next = !PEYK.isSoundEnabled();
+    PEYK.setSoundEnabled(next);
     $('settingSound').checked = next;
-    if (next) STANNG.playSfx('click');
+    if (next) PEYK.playSfx('click');
   });
 
   $('logoutBtn').addEventListener('click', async () => {
-    try { await STANNG.api('/api/logout', { method: 'POST' }); } catch (e) { /* leave anyway */ }
+    try { await PEYK.api('/api/logout', { method: 'POST' }); } catch (e) { /* leave anyway */ }
     window.location.href = '/login';
   });
 
   // ---------------- modals ----------------
-  function openModal(id) { $(id).classList.add('open'); STANNG.playSfx('open', 0.3); }
-  function closeModal(id) { $(id).classList.remove('open'); STANNG.playSfx('close', 0.3); }
+  function openModal(id) { $(id).classList.add('open'); PEYK.playSfx('open', 0.3); }
+  function closeModal(id) { $(id).classList.remove('open'); PEYK.playSfx('close', 0.3); }
   document.querySelectorAll('[data-close-modal]').forEach(b => {
     b.addEventListener('click', () => closeModal(b.dataset.closeModal));
   });
@@ -137,22 +137,22 @@
   let statsTimer = null;
   async function refreshStats() {
     try {
-      const s = await STANNG.api('/stats');
+      const s = await PEYK.api('/stats');
       $('statCpu').textContent = s.cpu_percent.toFixed(1) + '%';
       $('barCpu').style.width = Math.min(100, s.cpu_percent) + '%';
       $('statMem').textContent = s.mem_percent.toFixed(1) + '%';
       $('barMem').style.width = Math.min(100, s.mem_percent) + '%';
-      $('statUptime').textContent = STANNG.fmtDuration(s.uptime_seconds);
+      $('statUptime').textContent = PEYK.fmtDuration(s.uptime_seconds);
       const loc = s.location || {};
       $('statLocation').textContent = `${loc.flag || ''} ${loc.city || '?'}`;
-      $('statTotalTraffic').textContent = STANNG.fmtBytes((s.total_up || 0) + (s.total_down || 0));
-      $('statUp').textContent = STANNG.fmtBytes(s.total_up || 0);
-      $('statDown').textContent = STANNG.fmtBytes(s.total_down || 0);
+      $('statTotalTraffic').textContent = PEYK.fmtBytes((s.total_up || 0) + (s.total_down || 0));
+      $('statUp').textContent = PEYK.fmtBytes(s.total_up || 0);
+      $('statDown').textContent = PEYK.fmtBytes(s.total_down || 0);
       $('statActiveConn').textContent = s.active_connections || 0;
       $('statInboundCount').textContent = s.inbounds_count || 0;
       $('navInboundCount').textContent = s.inbounds_count || 0;
-      $('trafficUp').textContent = STANNG.fmtBytes(s.total_up || 0);
-      $('trafficDown').textContent = STANNG.fmtBytes(s.total_down || 0);
+      $('trafficUp').textContent = PEYK.fmtBytes(s.total_up || 0);
+      $('trafficDown').textContent = PEYK.fmtBytes(s.total_down || 0);
       lastHourly = s.hourly || [];
       renderTrafficChart($('trafficChart'), lastHourly);
     } catch (e) {
@@ -174,45 +174,45 @@
   let otaLatest = null;
   $('otaCheckBtn').addEventListener('click', async () => {
     const btn = $('otaCheckBtn'), el = $('otaResult');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      const r = await STANNG.api('/api/ota/check');
+      const r = await PEYK.api('/api/ota/check');
       if (r.update_available) {
-        el.innerHTML = `<span style="color:var(--accent)">${esc(STANNG.t('dash_ota_available'))} <b>${esc(r.latest)}</b></span> — <a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--info); text-decoration:underline;">GitHub</a>`;
+        el.innerHTML = `<span style="color:var(--accent)">${esc(PEYK.t('dash_ota_available'))} <b>${esc(r.latest)}</b></span> — <a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--info); text-decoration:underline;">GitHub</a>`;
         otaLatest = r.latest;
         $('otaUpdateBtn').style.display = '';
         $('otaUpdateHint').style.display = '';
       } else {
-        el.innerHTML = `<span style="color:var(--ok)">${esc(STANNG.t('dash_ota_uptodate'))}</span>`;
+        el.innerHTML = `<span style="color:var(--ok)">${esc(PEYK.t('dash_ota_uptodate'))}</span>`;
         otaLatest = null;
         $('otaUpdateBtn').style.display = 'none';
         $('otaUpdateHint').style.display = 'none';
       }
     } catch (e) {
       let msg = e.detail || 'error';
-      if (msg === 'no-repo-configured') msg = STANNG.t('ota_no_repo');
-      STANNG.toast(msg, 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      if (msg === 'no-repo-configured') msg = PEYK.t('ota_no_repo');
+      PEYK.toast(msg, 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   $('otaUpdateBtn').addEventListener('click', async () => {
-    if (!confirm(STANNG.t('dash_ota_update_confirm').replace('{version}', otaLatest || ''))) return;
+    if (!confirm(PEYK.t('dash_ota_update_confirm').replace('{version}', otaLatest || ''))) return;
     const btn = $('otaUpdateBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     $('otaCheckBtn').disabled = true;
     try {
-      const r = await STANNG.api('/api/ota/update', { method: 'POST' });
+      const r = await PEYK.api('/api/ota/update', { method: 'POST' });
       if (r.ok) {
-        $('otaResult').innerHTML = `<span style="color:var(--accent)">${esc(STANNG.t('dash_ota_updating'))}</span>`;
+        $('otaResult').innerHTML = `<span style="color:var(--accent)">${esc(PEYK.t('dash_ota_updating'))}</span>`;
         waitForRestart();
       } else {
-        STANNG.toast(STANNG.t('dash_ota_uptodate'), 'success');
-        STANNG.setLoading(btn, false);
+        PEYK.toast(PEYK.t('dash_ota_uptodate'), 'success');
+        PEYK.setLoading(btn, false);
         $('otaCheckBtn').disabled = false;
       }
     } catch (e) {
-      STANNG.toast(e.detail || 'error', 'error');
-      STANNG.setLoading(btn, false);
+      PEYK.toast(e.detail || 'error', 'error');
+      PEYK.setLoading(btn, false);
       $('otaCheckBtn').disabled = false;
     }
   });
@@ -225,12 +225,12 @@
         const res = await fetch('/health', { cache: 'no-store' });
         if (res.ok) {
           clearInterval(poll);
-          STANNG.toast(STANNG.t('dash_ota_done'), 'success', 3000);
+          PEYK.toast(PEYK.t('dash_ota_done'), 'success', 3000);
           setTimeout(() => window.location.reload(), 1200);
           return;
         }
       } catch (e) { /* restarting */ }
-      if (n > 60) { clearInterval(poll); STANNG.toast(STANNG.t('dash_ota_timeout'), 'error', 8000); }
+      if (n > 60) { clearInterval(poll); PEYK.toast(PEYK.t('dash_ota_timeout'), 'error', 8000); }
     }, 3000);
   }
 
@@ -240,7 +240,7 @@
   // ---------------- users ----------------
   async function loadInbounds() {
     try {
-      const r = await STANNG.api('/api/inbounds');
+      const r = await PEYK.api('/api/inbounds');
       inbounds = r.inbounds || [];
       // Drop selections for rows that no longer exist.
       const live = new Set(inbounds.map(i => i.uid));
@@ -253,7 +253,7 @@
       $('statExpiring').textContent = soon;
     } catch (e) {
       if (e.status === 401) { window.location.href = '/login'; return; }
-      STANNG.toast(e.detail || 'error', 'error');
+      PEYK.toast(e.detail || 'error', 'error');
     }
   }
 
@@ -298,33 +298,33 @@
       const pct = st.quota_bytes > 0 ? Math.min(100, (st.used / st.quota_bytes) * 100)
                                      : (st.used > 0 ? 6 : 0);
       const quotaTxt = ib.quota_gb > 0
-        ? `${STANNG.fmtBytes(st.used)} / ${ib.quota_gb} GB`
-        : `${STANNG.fmtBytes(st.used)} / ${STANNG.t('unlimited')}`;
+        ? `${PEYK.fmtBytes(st.used)} / ${ib.quota_gb} GB`
+        : `${PEYK.fmtBytes(st.used)} / ${PEYK.t('unlimited')}`;
       const expireTxt = ib.expire_at
-        ? `${st.days_left} ${STANNG.t('inb_days_left')}`
-        : STANNG.t('inb_no_expire');
+        ? `${st.days_left} ${PEYK.t('inb_days_left')}`
+        : PEYK.t('inb_no_expire');
 
       const tr = document.createElement('tr');
       tr.className = selected.has(ib.uid) ? 'is-selected' : '';
       tr.innerHTML = `
         <td class="col-check" data-label=""><input type="checkbox" class="checkbox row-check" data-uid="${esc(ib.uid)}" ${selected.has(ib.uid) ? 'checked' : ''} aria-label="select"></td>
-        <td data-label="${esc(STANNG.t('inb_name'))}"><b>${esc(ib.name)}</b>${ib.note ? `<div class="small muted">${esc(ib.note)}</div>` : ''}</td>
-        <td data-label="${esc(STANNG.t('inb_status'))}"><span class="pill ${label.cls}"><span class="pill-dot"></span>${esc(STANNG.t(label.key))}</span></td>
-        <td data-label="${esc(STANNG.t('inb_usage'))}" style="min-width:150px;">
+        <td data-label="${esc(PEYK.t('inb_name'))}"><b>${esc(ib.name)}</b>${ib.note ? `<div class="small muted">${esc(ib.note)}</div>` : ''}</td>
+        <td data-label="${esc(PEYK.t('inb_status'))}"><span class="pill ${label.cls}"><span class="pill-dot"></span>${esc(PEYK.t(label.key))}</span></td>
+        <td data-label="${esc(PEYK.t('inb_usage'))}" style="min-width:150px;">
           <div class="small mono">${esc(quotaTxt)}</div>
           <div class="bar ${usageClass(pct)}" style="margin-top:5px;"><span style="width:${pct}%"></span></div>
         </td>
-        <td data-label="${esc(STANNG.t('inb_expire'))}" class="mono small">${esc(expireTxt)}</td>
-        <td data-label="${esc(STANNG.t('inb_max_conn'))}" class="mono small">${esc(st.active_connections)}${ib.max_connections ? ' / ' + esc(ib.max_connections) : ''}</td>
-        <td data-label="${esc(STANNG.t('inb_actions'))}">
+        <td data-label="${esc(PEYK.t('inb_expire'))}" class="mono small">${esc(expireTxt)}</td>
+        <td data-label="${esc(PEYK.t('inb_max_conn'))}" class="mono small">${esc(st.active_connections)}${ib.max_connections ? ' / ' + esc(ib.max_connections) : ''}</td>
+        <td data-label="${esc(PEYK.t('inb_actions'))}">
           <div class="row-actions">
-            <button class="icon-btn btn-sm" data-action="links" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('inb_links'))}"><svg><use href="#icon-qr"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="history" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('traffic_history'))}"><svg><use href="#icon-chart"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="edit" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="renew" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('inb_renew'))}"><svg><use href="#icon-clock"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="reset" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('inb_reset_usage'))}"><svg><use href="#icon-refresh"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="regen" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('inb_regenerate'))}"><svg><use href="#icon-key"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="delete" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="links" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_links'))}"><svg><use href="#icon-qr"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="history" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('traffic_history'))}"><svg><use href="#icon-chart"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="edit" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="renew" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_renew'))}"><svg><use href="#icon-clock"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="reset" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_reset_usage'))}"><svg><use href="#icon-refresh"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="regen" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_regenerate'))}"><svg><use href="#icon-key"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="delete" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
           </div>
         </td>`;
       frag.appendChild(tr);
@@ -373,23 +373,23 @@
       const uids = [...selected];
       if (!uids.length) return;
       const confirmKeys = { delete: 'bulk_delete_confirm', disable: 'bulk_disable_confirm' };
-      if (confirmKeys[action] && !confirm(STANNG.t(confirmKeys[action]).replace('{n}', uids.length))) return;
+      if (confirmKeys[action] && !confirm(PEYK.t(confirmKeys[action]).replace('{n}', uids.length))) return;
 
       const body = { action, uids };
       if (action === 'renew') {
-        const days = parseInt(prompt(STANNG.t('inb_renew_days'), '30'), 10);
+        const days = parseInt(prompt(PEYK.t('inb_renew_days'), '30'), 10);
         if (!days || days < 1) return;
         body.days = days;
       }
-      STANNG.setLoading(btn, true);
+      PEYK.setLoading(btn, true);
       try {
-        const r = await STANNG.api('/api/inbounds/bulk-action', { method: 'POST', body });
-        STANNG.toast(STANNG.t('bulk_done').replace('{n}', r.affected), 'success');
+        const r = await PEYK.api('/api/inbounds/bulk-action', { method: 'POST', body });
+        PEYK.toast(PEYK.t('bulk_done').replace('{n}', r.affected), 'success');
         selected.clear();
         loadInbounds();
       } catch (e) {
-        STANNG.toast(e.detail || 'error', 'error');
-      } finally { STANNG.setLoading(btn, false); }
+        PEYK.toast(e.detail || 'error', 'error');
+      } finally { PEYK.setLoading(btn, false); }
     });
   });
 
@@ -397,7 +397,7 @@
   function fillPlanSelect(sel) {
     const el = $(sel);
     const keep = el.value;
-    el.innerHTML = `<option value="">${esc(STANNG.t('inb_no_plan'))}</option>`;
+    el.innerHTML = `<option value="">${esc(PEYK.t('inb_no_plan'))}</option>`;
     plans.forEach(p => {
       const o = document.createElement('option');
       o.value = p.id;
@@ -408,7 +408,7 @@
   }
 
   function openInboundModal(ib = null) {
-    $('inboundModalTitle').textContent = ib ? STANNG.t('edit') : STANNG.t('inb_add');
+    $('inboundModalTitle').textContent = ib ? PEYK.t('edit') : PEYK.t('inb_add');
     $('inboundUid').value = ib ? ib.uid : '';
     $('fName').value = ib ? ib.name : '';
     $('fQuota').value = ib ? (ib.quota_gb || '') : '';
@@ -452,23 +452,23 @@
       note: $('fNote').value.trim(),
     };
     if (Object.values(payload).some(v => typeof v === 'number' && !isFinite(v))) {
-      STANNG.toast(STANNG.t('inb_invalid_number'), 'error'); return;
+      PEYK.toast(PEYK.t('inb_invalid_number'), 'error'); return;
     }
     const btn = $('inboundSaveBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
       if (uid) {
-        await STANNG.api(`/api/inbounds/${uid}`, { method: 'PATCH', body: payload });
-        STANNG.toast(STANNG.t('inb_updated'), 'success');
+        await PEYK.api(`/api/inbounds/${uid}`, { method: 'PATCH', body: payload });
+        PEYK.toast(PEYK.t('inb_updated'), 'success');
       } else {
-        await STANNG.api('/api/inbounds', { method: 'POST', body: payload });
-        STANNG.toast(STANNG.t('inb_created'), 'success');
+        await PEYK.api('/api/inbounds', { method: 'POST', body: payload });
+        PEYK.toast(PEYK.t('inb_created'), 'success');
       }
       closeModal('inboundModal');
       loadInbounds();
     } catch (e) {
-      STANNG.toast(e.detail || 'error', 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   // ---------------- bulk create ----------------
@@ -514,21 +514,21 @@
       body.max_connections = num('bulkMaxConn');
     }
     const btn = $('bulkSaveBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      const r = await STANNG.api('/api/inbounds/bulk', { method: 'POST', body });
-      STANNG.toast(STANNG.t('bulk_created').replace('{n}', r.created), 'success');
+      const r = await PEYK.api('/api/inbounds/bulk', { method: 'POST', body });
+      PEYK.toast(PEYK.t('bulk_created').replace('{n}', r.created), 'success');
       closeModal('bulkModal');
       loadInbounds();
     } catch (e) {
-      STANNG.toast(e.detail || 'error', 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   // ---------------- plans ----------------
   async function loadPlans() {
     try {
-      const r = await STANNG.api('/api/plans');
+      const r = await PEYK.api('/api/plans');
       plans = r.plans || [];
       renderPlans();
     } catch (e) { /* non-fatal */ }
@@ -543,15 +543,15 @@
     plans.forEach(p => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td data-label="${esc(STANNG.t('plans_name'))}"><b>${esc(p.name)}</b></td>
-        <td data-label="${esc(STANNG.t('inb_quota'))}" class="mono small">${p.quota_gb ? esc(p.quota_gb) + ' GB' : esc(STANNG.t('unlimited'))}</td>
-        <td data-label="${esc(STANNG.t('inb_expire'))}" class="mono small">${p.days ? esc(p.days) + ' ' + esc(STANNG.t('inb_days_left')) : esc(STANNG.t('unlimited'))}</td>
-        <td data-label="${esc(STANNG.t('inb_max_conn'))}" class="mono small">${p.max_connections || esc(STANNG.t('unlimited'))}</td>
-        <td data-label="${esc(STANNG.t('inb_actions'))}">
+        <td data-label="${esc(PEYK.t('plans_name'))}"><b>${esc(p.name)}</b></td>
+        <td data-label="${esc(PEYK.t('inb_quota'))}" class="mono small">${p.quota_gb ? esc(p.quota_gb) + ' GB' : esc(PEYK.t('unlimited'))}</td>
+        <td data-label="${esc(PEYK.t('inb_expire'))}" class="mono small">${p.days ? esc(p.days) + ' ' + esc(PEYK.t('inb_days_left')) : esc(PEYK.t('unlimited'))}</td>
+        <td data-label="${esc(PEYK.t('inb_max_conn'))}" class="mono small">${p.max_connections || esc(PEYK.t('unlimited'))}</td>
+        <td data-label="${esc(PEYK.t('inb_actions'))}">
           <div class="row-actions">
-            <button class="icon-btn btn-sm" data-plan-action="use" data-id="${esc(p.id)}" title="${esc(STANNG.t('inb_bulk_create'))}"><svg><use href="#icon-layers"/></svg></button>
-            <button class="icon-btn btn-sm" data-plan-action="edit" data-id="${esc(p.id)}" title="${esc(STANNG.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
-            <button class="icon-btn btn-sm" data-plan-action="delete" data-id="${esc(p.id)}" title="${esc(STANNG.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
+            <button class="icon-btn btn-sm" data-plan-action="use" data-id="${esc(p.id)}" title="${esc(PEYK.t('inb_bulk_create'))}"><svg><use href="#icon-layers"/></svg></button>
+            <button class="icon-btn btn-sm" data-plan-action="edit" data-id="${esc(p.id)}" title="${esc(PEYK.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
+            <button class="icon-btn btn-sm" data-plan-action="delete" data-id="${esc(p.id)}" title="${esc(PEYK.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
           </div>
         </td>`;
       frag.appendChild(tr);
@@ -572,16 +572,16 @@
       $('bulkPlan').dispatchEvent(new Event('change'));
       return;
     }
-    if (!confirm(STANNG.t('plans_delete_confirm'))) return;
+    if (!confirm(PEYK.t('plans_delete_confirm'))) return;
     try {
-      await STANNG.api(`/api/plans/${plan.id}`, { method: 'DELETE' });
-      STANNG.toast(STANNG.t('plans_deleted'), 'success');
+      await PEYK.api(`/api/plans/${plan.id}`, { method: 'DELETE' });
+      PEYK.toast(PEYK.t('plans_deleted'), 'success');
       loadPlans();
-    } catch (err) { STANNG.toast(err.detail || 'error', 'error'); }
+    } catch (err) { PEYK.toast(err.detail || 'error', 'error'); }
   });
 
   function openPlanModal(plan = null) {
-    $('planModalTitle').textContent = plan ? STANNG.t('edit') : STANNG.t('plans_add');
+    $('planModalTitle').textContent = plan ? PEYK.t('edit') : PEYK.t('plans_add');
     $('planId').value = plan ? plan.id : '';
     $('planName').value = plan ? plan.name : '';
     $('planQuota').value = plan ? (plan.quota_gb || '') : '';
@@ -601,25 +601,25 @@
       max_connections: num('planMaxConn'),
       max_requests: num('planMaxReq'),
     };
-    if (!body.name) { STANNG.toast(STANNG.t('plans_name_required'), 'error'); return; }
+    if (!body.name) { PEYK.toast(PEYK.t('plans_name_required'), 'error'); return; }
     const btn = $('planSaveBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      if (id) await STANNG.api(`/api/plans/${id}`, { method: 'PATCH', body });
-      else await STANNG.api('/api/plans', { method: 'POST', body });
-      STANNG.toast(STANNG.t('settings_saved'), 'success');
+      if (id) await PEYK.api(`/api/plans/${id}`, { method: 'PATCH', body });
+      else await PEYK.api('/api/plans', { method: 'POST', body });
+      PEYK.toast(PEYK.t('settings_saved'), 'success');
       closeModal('planModal');
       loadPlans();
     } catch (e) {
-      STANNG.toast(e.detail || 'error', 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
 
   // ---------------- endpoints ----------------
   async function loadEndpoints() {
     try {
-      const r = await STANNG.api('/api/endpoints');
+      const r = await PEYK.api('/api/endpoints');
       endpoints = r.endpoints || [];
       renderEndpoints();
       $('navEndpointCount').textContent = endpoints.filter(e => e.enabled !== false).length;
@@ -629,12 +629,12 @@
   function healthCell(ep) {
     const h = ep.health || {};
     if (h.ok === null || h.ok === undefined) {
-      return `<span class="pill pill-muted">${esc(STANNG.t('ep_untested'))}</span>`;
+      return `<span class="pill pill-muted">${esc(PEYK.t('ep_untested'))}</span>`;
     }
-    if (!h.ok) return `<span class="pill pill-off"><span class="pill-dot"></span>${esc(STANNG.t('ep_down'))}</span>`;
+    if (!h.ok) return `<span class="pill pill-off"><span class="pill-dot"></span>${esc(PEYK.t('ep_down'))}</span>`;
     const ms = h.latency_ms;
     const cls = ms == null ? 'pill-on' : (ms < 300 ? 'pill-on' : ms < 900 ? 'pill-warn' : 'pill-off');
-    return `<span class="pill ${cls}"><span class="pill-dot"></span>${esc(ms != null ? ms + ' ms' : STANNG.t('ep_up'))}</span>`;
+    return `<span class="pill ${cls}"><span class="pill-dot"></span>${esc(ms != null ? ms + ' ms' : PEYK.t('ep_up'))}</span>`;
   }
 
   function renderEndpoints() {
@@ -649,16 +649,16 @@
         const tr = document.createElement('tr');
         const on = ep.enabled !== false;
         tr.innerHTML = `
-          <td data-label="${esc(STANNG.t('ep_name'))}"><b>${esc(ep.name || ep.address)}</b></td>
-          <td data-label="${esc(STANNG.t('ep_address'))}" class="mono small">${esc(ep.address)}:${esc(ep.port || 443)}</td>
-          <td data-label="${esc(STANNG.t('ep_host'))}" class="mono small">${esc(ep.host || '—')}${ep.sni ? ' / ' + esc(ep.sni) : ''}</td>
-          <td data-label="${esc(STANNG.t('ep_health'))}">${healthCell(ep)}</td>
-          <td data-label="${esc(STANNG.t('inb_status'))}"><span class="pill ${on ? 'pill-on' : 'pill-muted'}"><span class="pill-dot"></span>${esc(STANNG.t(on ? 'active' : 'inactive'))}</span></td>
-          <td data-label="${esc(STANNG.t('inb_actions'))}">
+          <td data-label="${esc(PEYK.t('ep_name'))}"><b>${esc(ep.name || ep.address)}</b></td>
+          <td data-label="${esc(PEYK.t('ep_address'))}" class="mono small">${esc(ep.address)}:${esc(ep.port || 443)}</td>
+          <td data-label="${esc(PEYK.t('ep_host'))}" class="mono small">${esc(ep.host || '—')}${ep.sni ? ' / ' + esc(ep.sni) : ''}</td>
+          <td data-label="${esc(PEYK.t('ep_health'))}">${healthCell(ep)}</td>
+          <td data-label="${esc(PEYK.t('inb_status'))}"><span class="pill ${on ? 'pill-on' : 'pill-muted'}"><span class="pill-dot"></span>${esc(PEYK.t(on ? 'active' : 'inactive'))}</span></td>
+          <td data-label="${esc(PEYK.t('inb_actions'))}">
             <div class="row-actions">
-              <button class="icon-btn btn-sm" data-ep-action="test" data-id="${esc(ep.id)}" title="${esc(STANNG.t('ep_test'))}"><svg><use href="#icon-refresh"/></svg></button>
-              <button class="icon-btn btn-sm" data-ep-action="edit" data-id="${esc(ep.id)}" title="${esc(STANNG.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
-              <button class="icon-btn btn-sm" data-ep-action="delete" data-id="${esc(ep.id)}" title="${esc(STANNG.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
+              <button class="icon-btn btn-sm" data-ep-action="test" data-id="${esc(ep.id)}" title="${esc(PEYK.t('ep_test'))}"><svg><use href="#icon-refresh"/></svg></button>
+              <button class="icon-btn btn-sm" data-ep-action="edit" data-id="${esc(ep.id)}" title="${esc(PEYK.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
+              <button class="icon-btn btn-sm" data-ep-action="delete" data-id="${esc(ep.id)}" title="${esc(PEYK.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
             </div>
           </td>`;
         frag.appendChild(tr);
@@ -667,7 +667,7 @@
   }
 
   function openEndpointModal(ep = null) {
-    $('endpointModalTitle').textContent = ep ? STANNG.t('edit') : STANNG.t('ep_add');
+    $('endpointModalTitle').textContent = ep ? PEYK.t('edit') : PEYK.t('ep_add');
     $('epId').value = ep ? ep.id : '';
     $('epName').value = ep ? (ep.name || '') : '';
     $('epAddress').value = ep ? ep.address : '';
@@ -693,35 +693,35 @@
       sort: parseInt($('epSort').value, 10) || 0,
       enabled: $('epEnabled').checked,
     };
-    if (!body.address) { STANNG.toast(STANNG.t('ep_address_required'), 'error'); return; }
+    if (!body.address) { PEYK.toast(PEYK.t('ep_address_required'), 'error'); return; }
     const btn = $('epSaveBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      if (id) await STANNG.api(`/api/endpoints/${id}`, { method: 'PATCH', body });
-      else await STANNG.api('/api/endpoints', { method: 'POST', body });
-      STANNG.toast(STANNG.t('settings_saved'), 'success');
+      if (id) await PEYK.api(`/api/endpoints/${id}`, { method: 'PATCH', body });
+      else await PEYK.api('/api/endpoints', { method: 'POST', body });
+      PEYK.toast(PEYK.t('settings_saved'), 'success');
       closeModal('endpointModal');
       loadEndpoints();
     } catch (e) {
       const map = { 'invalid-address': 'ep_bad_address', 'endpoint-limit-reached': 'ep_limit' };
-      STANNG.toast(map[e.detail] ? STANNG.t(map[e.detail]) : (e.detail || 'error'), 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(map[e.detail] ? PEYK.t(map[e.detail]) : (e.detail || 'error'), 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   async function testEndpoint(id, silent) {
     try {
-      const r = await STANNG.api(`/api/endpoints/${id}/test`, { method: 'POST' });
+      const r = await PEYK.api(`/api/endpoints/${id}/test`, { method: 'POST' });
       const ep = endpoints.find(e => e.id === id);
       if (ep) ep.health = r.health;
       renderEndpoints();
       if (!silent) {
-        STANNG.toast(
-          r.ok ? `${STANNG.t('ep_up')} — ${r.latency_ms} ms` : `${STANNG.t('ep_down')} — ${r.detail}`,
+        PEYK.toast(
+          r.ok ? `${PEYK.t('ep_up')} — ${r.latency_ms} ms` : `${PEYK.t('ep_down')} — ${r.detail}`,
           r.ok ? 'success' : 'error');
       }
       return r.ok;
     } catch (e) {
-      if (!silent) STANNG.toast(e.detail || 'error', 'error');
+      if (!silent) PEYK.toast(e.detail || 'error', 'error');
       return false;
     }
   }
@@ -734,28 +734,28 @@
     const action = btn.dataset.epAction;
     if (action === 'edit') return openEndpointModal(ep);
     if (action === 'test') {
-      STANNG.setLoading(btn, true);
+      PEYK.setLoading(btn, true);
       await testEndpoint(ep.id, false);
-      STANNG.setLoading(btn, false);
+      PEYK.setLoading(btn, false);
       return;
     }
-    if (!confirm(STANNG.t('ep_delete_confirm'))) return;
+    if (!confirm(PEYK.t('ep_delete_confirm'))) return;
     try {
-      await STANNG.api(`/api/endpoints/${ep.id}`, { method: 'DELETE' });
-      STANNG.toast(STANNG.t('ep_deleted'), 'success');
+      await PEYK.api(`/api/endpoints/${ep.id}`, { method: 'DELETE' });
+      PEYK.toast(PEYK.t('ep_deleted'), 'success');
       loadEndpoints();
-    } catch (err) { STANNG.toast(err.detail || 'error', 'error'); }
+    } catch (err) { PEYK.toast(err.detail || 'error', 'error'); }
   });
 
   $('testAllEndpointsBtn').addEventListener('click', async () => {
     const btn = $('testAllEndpointsBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     // Sequential on purpose: a burst of parallel probes from one box skews
     // the latency numbers it is trying to measure.
     let up = 0;
     for (const ep of endpoints) if (await testEndpoint(ep.id, true)) up++;
-    STANNG.setLoading(btn, false);
-    STANNG.toast(STANNG.t('ep_test_result').replace('{up}', up).replace('{total}', endpoints.length),
+    PEYK.setLoading(btn, false);
+    PEYK.toast(PEYK.t('ep_test_result').replace('{up}', up).replace('{total}', endpoints.length),
                  up === endpoints.length ? 'success' : 'info');
   });
 
@@ -768,13 +768,13 @@
     inbounds.forEach(ib => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td data-label="${esc(STANNG.t('inb_name'))}"><b>${esc(ib.name)}</b></td>
-        <td data-label="${esc(STANNG.t('dash_upload'))}" class="mono small">${esc(STANNG.fmtBytes(ib.used_up || 0))}</td>
-        <td data-label="${esc(STANNG.t('dash_download'))}" class="mono small">${esc(STANNG.fmtBytes(ib.used_down || 0))}</td>
-        <td data-label="${esc(STANNG.t('inb_usage'))}" class="mono small">${esc(STANNG.fmtBytes((ib.used_up || 0) + (ib.used_down || 0)))}</td>
-        <td data-label="${esc(STANNG.t('traffic_history'))}">
+        <td data-label="${esc(PEYK.t('inb_name'))}"><b>${esc(ib.name)}</b></td>
+        <td data-label="${esc(PEYK.t('dash_upload'))}" class="mono small">${esc(PEYK.fmtBytes(ib.used_up || 0))}</td>
+        <td data-label="${esc(PEYK.t('dash_download'))}" class="mono small">${esc(PEYK.fmtBytes(ib.used_down || 0))}</td>
+        <td data-label="${esc(PEYK.t('inb_usage'))}" class="mono small">${esc(PEYK.fmtBytes((ib.used_up || 0) + (ib.used_down || 0)))}</td>
+        <td data-label="${esc(PEYK.t('traffic_history'))}">
           <div class="row-actions">
-            <button class="icon-btn btn-sm" data-action="history" data-uid="${esc(ib.uid)}" title="${esc(STANNG.t('traffic_history'))}"><svg><use href="#icon-chart"/></svg></button>
+            <button class="icon-btn btn-sm" data-action="history" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('traffic_history'))}"><svg><use href="#icon-chart"/></svg></button>
           </div>
         </td>`;
       frag.appendChild(tr);
@@ -802,12 +802,12 @@
     };
     const job = jobs[action];
     if (!job) return;
-    if (job.confirm && !confirm(STANNG.t(job.confirm))) return;
+    if (job.confirm && !confirm(PEYK.t(job.confirm))) return;
     try {
-      await STANNG.api(job.path, { method: job.method });
-      STANNG.toast(STANNG.t(job.ok), 'success');
+      await PEYK.api(job.path, { method: job.method });
+      PEYK.toast(PEYK.t(job.ok), 'success');
       loadInbounds();
-    } catch (e) { STANNG.toast(e.detail || 'error', 'error'); }
+    } catch (e) { PEYK.toast(e.detail || 'error', 'error'); }
   }
 
   // ---------------- renew ----------------
@@ -820,25 +820,25 @@
   $('renewSaveBtn').addEventListener('click', async () => {
     const uid = $('renewUid').value;
     const days = parseInt($('renewDays').value, 10);
-    if (!uid || !days || days < 1) { STANNG.toast(STANNG.t('inb_invalid_number'), 'error'); return; }
+    if (!uid || !days || days < 1) { PEYK.toast(PEYK.t('inb_invalid_number'), 'error'); return; }
     const btn = $('renewSaveBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      await STANNG.api(`/api/inbounds/${uid}/renew`, {
+      await PEYK.api(`/api/inbounds/${uid}/renew`, {
         method: 'POST', body: { days, reset_usage: $('renewResetUsage').checked },
       });
-      STANNG.toast(STANNG.t('inb_renewed'), 'success');
+      PEYK.toast(PEYK.t('inb_renewed'), 'success');
       closeModal('renewModal');
       loadInbounds();
     } catch (e) {
-      STANNG.toast(e.detail || 'error', 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   // ---------------- links ----------------
   async function showLinks(uid) {
     try {
-      const r = await STANNG.api(`/api/inbounds/${uid}/links`);
+      const r = await PEYK.api(`/api/inbounds/${uid}/links`);
       const configs = (r.links && r.links.configs) || [];
       $('linkTls').textContent = r.links.tls || '';
       const multi = $('multiConfigBlock');
@@ -861,13 +861,13 @@
       $('activeIpsBlock').style.display = ips.length ? '' : 'none';
       $('activeIpsList').textContent = ips.join(', ');
       openModal('linksModal');
-    } catch (e) { STANNG.toast(e.detail || 'error', 'error'); }
+    } catch (e) { PEYK.toast(e.detail || 'error', 'error'); }
   }
 
   // ---------------- per-user history ----------------
   async function showHistory(uid) {
     try {
-      const r = await STANNG.api(`/api/inbounds/${uid}/history`);
+      const r = await PEYK.api(`/api/inbounds/${uid}/history`);
       $('historyName').textContent = r.name || '';
       const series = (r.history || []).map(h => ({
         t: Date.parse(h.d + 'T00:00:00Z') / 1000, up: h.up, down: h.down,
@@ -876,13 +876,13 @@
       const totalDown = series.reduce((a, b) => a + b.down, 0);
       const active = series.filter(s => s.up + s.down > 0).length;
       $('historySummary').textContent =
-        `${STANNG.t('dash_upload')}: ${STANNG.fmtBytes(totalUp)} · ` +
-        `${STANNG.t('dash_download')}: ${STANNG.fmtBytes(totalDown)} · ` +
-        `${STANNG.t('history_active_days').replace('{n}', active)}`;
+        `${PEYK.t('dash_upload')}: ${PEYK.fmtBytes(totalUp)} · ` +
+        `${PEYK.t('dash_download')}: ${PEYK.fmtBytes(totalDown)} · ` +
+        `${PEYK.t('history_active_days').replace('{n}', active)}`;
       openModal('historyModal');
       // Canvas needs a laid-out box before it can size itself.
       requestAnimationFrame(() => renderTrafficChart($('historyChart'), series, { unit: 'day' }));
-    } catch (e) { STANNG.toast(e.detail || 'error', 'error'); }
+    } catch (e) { PEYK.toast(e.detail || 'error', 'error'); }
   }
 
   // ---------------- copy ----------------
@@ -901,9 +901,9 @@
         document.execCommand('copy');
         ta.remove();
       }
-      STANNG.toast(STANNG.t('copied'), 'success', 1500);
-      STANNG.playSfx('click', 0.35);
-    } catch (e) { STANNG.toast('error', 'error'); }
+      PEYK.toast(PEYK.t('copied'), 'success', 1500);
+      PEYK.playSfx('click', 0.35);
+    } catch (e) { PEYK.toast('error', 'error'); }
   }
   document.querySelectorAll('[data-copy]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -917,14 +917,14 @@
     e.preventDefault();
     const np = $('newPassword').value;
     if (np && np !== $('newPassword2').value) {
-      STANNG.toast(STANNG.t('setup_mismatch'), 'error');
-      STANNG.shake($('securityForm'));
+      PEYK.toast(PEYK.t('setup_mismatch'), 'error');
+      PEYK.shake($('securityForm'));
       return;
     }
     const btn = $('securityBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      await STANNG.api('/api/change-password', {
+      await PEYK.api('/api/change-password', {
         method: 'POST',
         body: {
           old_password: $('oldPassword').value,
@@ -932,26 +932,26 @@
           new_password: np,
         },
       });
-      STANNG.toast(STANNG.t('sec_updated'), 'success');
+      PEYK.toast(PEYK.t('sec_updated'), 'success');
       $('securityForm').reset();
     } catch (e2) {
       let msg = e2.detail;
-      if (msg === 'wrong-old-password') msg = STANNG.t('sec_wrong_old');
-      else if (msg === 'weak-password') msg = STANNG.t('setup_password_hint');
-      else if (msg === 'invalid-username') msg = STANNG.t('setup_username_hint');
-      else if (msg === 'nothing-to-change') msg = STANNG.t('sec_nothing_to_change');
-      STANNG.toast(msg || 'error', 'error');
-      STANNG.shake($('securityForm'));
-    } finally { STANNG.setLoading(btn, false); }
+      if (msg === 'wrong-old-password') msg = PEYK.t('sec_wrong_old');
+      else if (msg === 'weak-password') msg = PEYK.t('setup_password_hint');
+      else if (msg === 'invalid-username') msg = PEYK.t('setup_username_hint');
+      else if (msg === 'nothing-to-change') msg = PEYK.t('sec_nothing_to_change');
+      PEYK.toast(msg || 'error', 'error');
+      PEYK.shake($('securityForm'));
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   // ---------------- security: 2FA ----------------
   async function loadTwofaStatus() {
     try {
-      const r = await STANNG.api('/api/2fa/status');
+      const r = await PEYK.api('/api/2fa/status');
       const on = !!r.enabled;
       const badge = $('twofaBadge');
-      badge.textContent = STANNG.t(on ? 'twofa_on' : 'twofa_off');
+      badge.textContent = PEYK.t(on ? 'twofa_on' : 'twofa_off');
       badge.className = 'pill ' + (on ? 'pill-on' : 'pill-muted');
       $('twofaOffBlock').style.display = on ? 'none' : '';
       $('twofaOnBlock').style.display = on ? '' : 'none';
@@ -961,9 +961,9 @@
 
   $('twofaSetupBtn').addEventListener('click', async () => {
     const btn = $('twofaSetupBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      const r = await STANNG.api('/api/2fa/setup', { method: 'POST' });
+      const r = await PEYK.api('/api/2fa/setup', { method: 'POST' });
       $('twofaSecret').textContent = r.secret;
       $('twofaQr').src = `/api/2fa/qr?t=${Date.now()}`;
       $('twofaStep1').style.display = '';
@@ -972,23 +972,23 @@
       $('twofaCode').value = '';
       openModal('twofaModal');
     } catch (e) {
-      STANNG.toast(e.detail || 'error', 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   $('twofaConfirmBtn').addEventListener('click', async () => {
     const code = $('twofaCode').value.trim();
-    if (!/^\d{6}$/.test(code)) { STANNG.toast(STANNG.t('twofa_invalid'), 'error'); return; }
+    if (!/^\d{6}$/.test(code)) { PEYK.toast(PEYK.t('twofa_invalid'), 'error'); return; }
     const btn = $('twofaConfirmBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      const r = await STANNG.api('/api/2fa/enable', { method: 'POST', body: { code } });
+      const r = await PEYK.api('/api/2fa/enable', { method: 'POST', body: { code } });
       showRecoveryCodes(r.recovery_codes || []);
-      STANNG.toast(STANNG.t('twofa_enabled'), 'success');
+      PEYK.toast(PEYK.t('twofa_enabled'), 'success');
       loadTwofaStatus();
     } catch (e) {
-      STANNG.toast(e.detail === 'invalid-code' ? STANNG.t('twofa_invalid') : (e.detail || 'error'), 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.detail === 'invalid-code' ? PEYK.t('twofa_invalid') : (e.detail || 'error'), 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   function showRecoveryCodes(codes) {
@@ -1014,7 +1014,7 @@
   let pendingConfirm = null;
   function askPassword(titleKey, fn) {
     pendingConfirm = fn;
-    $('confirmPassTitle').textContent = STANNG.t(titleKey);
+    $('confirmPassTitle').textContent = PEYK.t(titleKey);
     $('confirmPassInput').value = '';
     openModal('confirmPassModal');
     setTimeout(() => $('confirmPassInput').focus(), 60);
@@ -1023,14 +1023,14 @@
     const password = $('confirmPassInput').value;
     if (!password || !pendingConfirm) return;
     const btn = $('confirmPassBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
       await pendingConfirm(password);
       closeModal('confirmPassModal');
     } catch (e) {
-      STANNG.toast(e.detail === 'wrong-password' ? STANNG.t('sec_wrong_old') : (e.detail || 'error'), 'error');
-      STANNG.shake($('confirmPassInput'));
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.detail === 'wrong-password' ? PEYK.t('sec_wrong_old') : (e.detail || 'error'), 'error');
+      PEYK.shake($('confirmPassInput'));
+    } finally { PEYK.setLoading(btn, false); }
   });
   $('confirmPassInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); $('confirmPassBtn').click(); }
@@ -1038,15 +1038,15 @@
 
   $('twofaDisableBtn').addEventListener('click', () => {
     askPassword('twofa_disable', async (password) => {
-      await STANNG.api('/api/2fa/disable', { method: 'POST', body: { password } });
-      STANNG.toast(STANNG.t('twofa_disabled'), 'success');
+      await PEYK.api('/api/2fa/disable', { method: 'POST', body: { password } });
+      PEYK.toast(PEYK.t('twofa_disabled'), 'success');
       loadTwofaStatus();
     });
   });
 
   $('twofaRegenBtn').addEventListener('click', () => {
     askPassword('twofa_regen', async (password) => {
-      const r = await STANNG.api('/api/2fa/recovery-codes', { method: 'POST', body: { password } });
+      const r = await PEYK.api('/api/2fa/recovery-codes', { method: 'POST', body: { password } });
       showRecoveryCodes(r.recovery_codes || []);
       loadTwofaStatus();
     });
@@ -1055,7 +1055,7 @@
   // ---------------- security: login log ----------------
   async function loadLoginLog() {
     try {
-      const r = await STANNG.api('/api/login-log');
+      const r = await PEYK.api('/api/login-log');
       const tbody = $('loginLogBody');
       const rows = r.entries || [];
       $('loginLogEmpty').style.display = rows.length ? 'none' : 'block';
@@ -1064,15 +1064,15 @@
       rows.forEach(e => {
         const tr = document.createElement('tr');
         const when = new Date(e.ts * 1000).toLocaleString(
-          STANNG.getLang() === 'fa' ? 'fa-IR' : 'en-US');
+          PEYK.getLang() === 'fa' ? 'fa-IR' : 'en-US');
         const pill = e.ok
-          ? `<span class="pill pill-on"><span class="pill-dot"></span>${esc(STANNG.t('loginlog_ok'))}</span>`
-          : `<span class="pill pill-off"><span class="pill-dot"></span>${esc(STANNG.t('loginlog_fail'))}</span>`;
+          ? `<span class="pill pill-on"><span class="pill-dot"></span>${esc(PEYK.t('loginlog_ok'))}</span>`
+          : `<span class="pill pill-off"><span class="pill-dot"></span>${esc(PEYK.t('loginlog_fail'))}</span>`;
         tr.innerHTML = `
-          <td data-label="${esc(STANNG.t('loginlog_time'))}" class="small">${esc(when)}</td>
-          <td data-label="${esc(STANNG.t('loginlog_ip'))}" class="mono small">${esc(e.ip)}</td>
-          <td data-label="${esc(STANNG.t('loginlog_method'))}" class="mono small">${esc(e.method)}</td>
-          <td data-label="${esc(STANNG.t('loginlog_result'))}">${pill}</td>`;
+          <td data-label="${esc(PEYK.t('loginlog_time'))}" class="small">${esc(when)}</td>
+          <td data-label="${esc(PEYK.t('loginlog_ip'))}" class="mono small">${esc(e.ip)}</td>
+          <td data-label="${esc(PEYK.t('loginlog_method'))}" class="mono small">${esc(e.method)}</td>
+          <td data-label="${esc(PEYK.t('loginlog_result'))}">${pill}</td>`;
         frag.appendChild(tr);
       });
       tbody.appendChild(frag);
@@ -1083,21 +1083,21 @@
   // ---------------- settings ----------------
   async function saveSettings(btnId, payload, after) {
     const btn = $(btnId);
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      const r = await STANNG.api('/api/settings', { method: 'POST', body: payload });
-      STANNG.toast(STANNG.t('settings_saved'), 'success');
+      const r = await PEYK.api('/api/settings', { method: 'POST', body: payload });
+      PEYK.toast(PEYK.t('settings_saved'), 'success');
       if (after) after(r);
     } catch (e) {
       let msg = e.detail || 'error';
-      if (msg === 'invalid-bot-token') msg = STANNG.t('notify_bad_token');
-      if (msg === 'invalid-ota-repo') msg = STANNG.t('ota_bad_repo');
-      STANNG.toast(msg, 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      if (msg === 'invalid-bot-token') msg = PEYK.t('notify_bad_token');
+      if (msg === 'invalid-ota-repo') msg = PEYK.t('ota_bad_repo');
+      PEYK.toast(msg, 'error');
+    } finally { PEYK.setLoading(btn, false); }
   }
 
   $('saveSettingsBtn').addEventListener('click', () => {
-    STANNG.setSoundEnabled($('settingSound').checked);
+    PEYK.setSoundEnabled($('settingSound').checked);
     saveSettings('saveSettingsBtn', {
       public_domain: $('settingPublicDomain').value.trim(),
       ota_repo: $('settingOtaRepo').value.trim(),
@@ -1150,14 +1150,14 @@
 
   $('testNotifyBtn').addEventListener('click', async () => {
     const btn = $('testNotifyBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
-      await STANNG.api('/api/notify/test', { method: 'POST' });
-      STANNG.toast(STANNG.t('notify_test_sent'), 'success');
+      await PEYK.api('/api/notify/test', { method: 'POST' });
+      PEYK.toast(PEYK.t('notify_test_sent'), 'success');
     } catch (e) {
-      const msg = e.detail === 'not-configured' ? STANNG.t('notify_not_configured') : (e.detail || 'error');
-      STANNG.toast(msg, 'error', 7000);
-    } finally { STANNG.setLoading(btn, false); }
+      const msg = e.detail === 'not-configured' ? PEYK.t('notify_not_configured') : (e.detail || 'error');
+      PEYK.toast(msg, 'error', 7000);
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   function applyFragmentFieldState() {
@@ -1171,7 +1171,7 @@
   // ---------------- backup / restore ----------------
   $('backupBtn').addEventListener('click', async () => {
     const btn = $('backupBtn');
-    STANNG.setLoading(btn, true);
+    PEYK.setLoading(btn, true);
     try {
       const res = await fetch('/api/backup', { credentials: 'same-origin' });
       if (!res.ok) throw new Error('backup-failed');
@@ -1186,8 +1186,8 @@
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      STANNG.toast(e.message || 'error', 'error');
-    } finally { STANNG.setLoading(btn, false); }
+      PEYK.toast(e.message || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
   });
 
   $('restoreBtn').addEventListener('click', () => $('restoreFile').click());
@@ -1195,20 +1195,20 @@
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
     if (!file) return;
-    if (!confirm(STANNG.t('settings_restore_confirm'))) return;
+    if (!confirm(PEYK.t('settings_restore_confirm'))) return;
     try {
       const parsed = JSON.parse(await file.text());
-      await STANNG.api('/api/restore', { method: 'POST', body: { db: parsed } });
-      STANNG.toast(STANNG.t('settings_restored'), 'success', 4000);
+      await PEYK.api('/api/restore', { method: 'POST', body: { db: parsed } });
+      PEYK.toast(PEYK.t('settings_restored'), 'success', 4000);
       setTimeout(() => { window.location.href = '/login'; }, 1400);
     } catch (err) {
-      STANNG.toast(err.detail || err.message || 'invalid-backup', 'error');
+      PEYK.toast(err.detail || err.message || 'invalid-backup', 'error');
     }
   });
 
   $('logoutAllBtn').addEventListener('click', async () => {
-    if (!confirm(STANNG.t('settings_logout_all_confirm'))) return;
-    try { await STANNG.api('/api/logout-all', { method: 'POST' }); } catch (e) { /* leaving anyway */ }
+    if (!confirm(PEYK.t('settings_logout_all_confirm'))) return;
+    try { await PEYK.api('/api/logout-all', { method: 'POST' }); } catch (e) { /* leaving anyway */ }
     window.location.href = '/login';
   });
 

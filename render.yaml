@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: stanng
+    name: peyk
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -12,6 +12,6 @@ services:
       - key: PORT
         value: 8000
       # Render terminates TLS at its own router: exactly one trusted hop.
-      - key: STANNG_PROXY_HOPS
+      - key: PEYK_PROXY_HOPS
         value: 1
     autoDeploy: true

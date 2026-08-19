@@ -1,5 +1,5 @@
 """
-StanNG - Minimal VLESS-over-WebSocket forwarding engine.
+Peyk - Minimal VLESS-over-WebSocket forwarding engine.
 
 Implements just enough of the VLESS protocol (proxy protocol v0, no encryption
 layer beyond outer TLS which is terminated by the platform / Cloudflare edge)

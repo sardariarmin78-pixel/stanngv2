@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
+Peyk — a single-service VLESS-over-WebSocket panel.
+
+"Peyk" (پیک) is Persian for courier: the riders who carried messages along
+protected routes across the empire, which is what this does for traffic.
 
 Version 1.6.0
   * live quota/expiry enforcement (limits used to apply only at connect time)
@@ -45,34 +48,57 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.9.0"
+APP_VERSION = "2.0.0"
+
+
+def _env_raw(name: str):
+    """Read PEYK_<NAME>, falling back to the pre-2.0 STANNG_<NAME>.
+
+    The fallback is not cosmetic: a deployment with STANNG_DATA_DIR set would
+    otherwise come up pointing at an empty database after updating.
+    """
+    value = os.environ.get(f"PEYK_{name}")
+    if value is None:
+        value = os.environ.get(f"STANNG_{name}")
+    return value
+
+
+def _platform_env(name: str, default):
+    """A variable the hosting platform sets under its own plain name.
+
+    PORT is the one that matters: Railway and Render inject it unprefixed, so
+    reading it through the PEYK_/STANNG_ lookup binds the default port and the
+    service silently never receives traffic.
+    """
+    return os.environ.get(name, default)
 
 
 def _env_str(name: str, default: str) -> str:
-    return (os.environ.get(name) or "").strip() or default
+    return (_env_raw(name) or "").strip() or default
 
 
 def _env_int(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, default))
+        raw = _env_raw(name)
+        return int(raw) if raw is not None else default
     except (TypeError, ValueError):
         return default
 
 
 # ---- branding: env vars set the defaults, panel settings can override them ----
-DEFAULT_PANEL_NAME = _env_str("STANNG_PANEL_NAME", "StanNG")
-DEFAULT_TELEGRAM_CONTACT = _env_str("STANNG_TELEGRAM_CONTACT", "https://t.me/rvivl")
+DEFAULT_PANEL_NAME = _env_str("PANEL_NAME", "Peyk")
+DEFAULT_TELEGRAM_CONTACT = _env_str("TELEGRAM_CONTACT", "https://t.me/rvivl")
 
-SESSION_COOKIE = _env_str("STANNG_SESSION_COOKIE", "stanng_session")
-SESSION_MAX_AGE = _env_int("STANNG_SESSION_MAX_AGE", 60 * 60 * 24 * 7)
-LOGIN_MAX_ATTEMPTS = _env_int("STANNG_LOGIN_MAX_ATTEMPTS", 6)
-LOGIN_LOCK_SECONDS = _env_int("STANNG_LOGIN_LOCK_SECONDS", 5 * 60)
+SESSION_COOKIE = _env_str("SESSION_COOKIE", "peyk_session")
+SESSION_MAX_AGE = _env_int("SESSION_MAX_AGE", 60 * 60 * 24 * 7)
+LOGIN_MAX_ATTEMPTS = _env_int("LOGIN_MAX_ATTEMPTS", 6)
+LOGIN_LOCK_SECONDS = _env_int("LOGIN_LOCK_SECONDS", 5 * 60)
 
 # How many reverse proxies sit in front of us. X-Forwarded-For is appended to by
 # each hop, so the trustworthy entry is the Nth from the right — reading the
 # leftmost value (as this used to) lets any client forge its own IP and either
 # dodge the login lockout or lock somebody else out.
-TRUSTED_PROXY_HOPS = max(0, _env_int("STANNG_PROXY_HOPS", 1))
+TRUSTED_PROXY_HOPS = max(0, _env_int("PROXY_HOPS", 1))
 
 FLUSH_INTERVAL = 5          # seconds: fold pending traffic into the in-memory db
 DISK_FLUSH_INTERVAL = 15    # seconds: persist the db if anything changed
@@ -83,7 +109,7 @@ JOURNAL_INTERVAL = 1        # seconds: publish this worker's runtime slice
 
 # One event loop saturates a single core, and measured aggregate throughput
 # *falls* as concurrency rises. "auto" spreads the relay over every core.
-WORKER_COUNT = cluster.resolve_workers(os.environ.get("STANNG_WORKERS", "auto"))
+WORKER_COUNT = cluster.resolve_workers(_env_raw("WORKERS") or "auto")
 MULTIPROCESS = WORKER_COUNT > 1
 MAX_BULK_CREATE = 200       # users creatable in one bulk request
 
@@ -203,7 +229,7 @@ async def security_headers(request: Request, call_next):
 
 # ------------------------------------------------------------------ helpers
 def get_serializer(db) -> URLSafeTimedSerializer:
-    return URLSafeTimedSerializer(db["secret_key"], salt="stanng-session")
+    return URLSafeTimedSerializer(db["secret_key"], salt="peyk-session")
 
 
 def _forwarded_for(headers) -> Optional[str]:
@@ -657,7 +683,7 @@ async def _keep_alive_loop():
                 url = domain if domain.startswith("http") else f"https://{domain}"
                 target = f"{url.rstrip('/')}/health"
             else:
-                target = f"http://127.0.0.1:{os.environ.get('PORT', '8000')}/health"
+                target = f"http://127.0.0.1:{_platform_env('PORT', '8000')}/health"
             async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
                 await client.get(target)
         except asyncio.CancelledError:
@@ -1135,7 +1161,7 @@ async def api_notify_status(user: str = Depends(require_auth)):
 
 
 # ------------------------------------------------------------------ inbounds api
-MAX_INBOUNDS = _env_int("STANNG_MAX_INBOUNDS", 5000)
+MAX_INBOUNDS = _env_int("MAX_INBOUNDS", 5000)
 
 
 def _as_number(value, field: str, minimum: float, maximum: float, integer: bool):
@@ -1963,7 +1989,7 @@ async def api_backup(user: str = Depends(require_auth)):
     db = await store.get()
     payload = store.snapshot_json()
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    name = re.sub(r"[^A-Za-z0-9_.-]", "", brand(db)["panel_name"]) or "stanng"
+    name = re.sub(r"[^A-Za-z0-9_.-]", "", brand(db)["panel_name"]) or "peyk"
     return Response(
         payload, media_type="application/json",
         headers={
@@ -2191,7 +2217,7 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
                 if not zip_url:
                     raise HTTPException(502, "no-downloadable-archive-found")
 
-                tmp_root = tempfile.mkdtemp(prefix="stanng_ota_")
+                tmp_root = tempfile.mkdtemp(prefix="peyk_ota_")
                 zip_path = os.path.join(tmp_root, "release.zip")
                 staged_dir = os.path.join(tmp_root, "staged")
                 os.makedirs(staged_dir, exist_ok=True)
@@ -2304,9 +2330,12 @@ async def ws_endpoint(websocket: WebSocket, uid: str):
 def _serve():
     import uvicorn
 
-    host = os.environ.get("HOST", "0.0.0.0")
-    port = _env_int("PORT", 8000)
-    log_level = os.environ.get("LOG_LEVEL", "info")
+    host = _platform_env("HOST", "0.0.0.0")
+    try:
+        port = int(_platform_env("PORT", 8000))
+    except (TypeError, ValueError):
+        port = 8000
+    log_level = _platform_env("LOG_LEVEL", "info")
 
     kwargs = dict(
         host=host,
@@ -2315,7 +2344,7 @@ def _serve():
         # Let uvicorn parse the platform's forwarded headers; we still pick the
         # trustworthy X-Forwarded-For entry ourselves via TRUSTED_PROXY_HOPS.
         proxy_headers=True,
-        forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "*"),
+        forwarded_allow_ips=_platform_env("FORWARDED_ALLOW_IPS", "*"),
         ws_ping_interval=20,
         ws_ping_timeout=20,
     )
@@ -2327,7 +2356,7 @@ def _serve():
     # Workers each bind the same port; the kernel spreads accepts across
     # them, which is what lifts the relay off a single core.
     cluster.cleanup_journals(RUNTIME_DIR)
-    print(f"[stanng] starting {WORKER_COUNT} workers on {host}:{port}", flush=True)
+    print(f"[peyk] starting {WORKER_COUNT} workers on {host}:{port}", flush=True)
     uvicorn.run("main:app", workers=WORKER_COUNT, **kwargs)
 
 

@@ -1,5 +1,5 @@
 """
-StanNG - Persistent JSON storage layer.
+Peyk - Persistent JSON storage layer.
 Single-file, dependency-free storage engine (no external DB required).
 Async-safe via an in-process lock + atomic file writes.
 
@@ -20,7 +20,20 @@ from typing import Any, Dict, Optional
 
 from cluster import FileLock
 
-DATA_DIR = os.environ.get("STANNG_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
+def resolve_data_dir(env=None) -> str:
+    """PEYK_DATA_DIR, falling back to the pre-2.0 STANNG_DATA_DIR.
+
+    The fallback is the difference between an update and an outage: a
+    deployment with only STANNG_DATA_DIR set would otherwise come up on an
+    empty database and look like every user had vanished.
+    """
+    env = os.environ if env is None else env
+    return (env.get("PEYK_DATA_DIR")
+            or env.get("STANNG_DATA_DIR")
+            or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
+
+
+DATA_DIR = resolve_data_dir()
 DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
@@ -193,8 +206,9 @@ def normalize_db(db: Dict[str, Any]) -> bool:
         if "app_version" in db["settings"]:
             del db["settings"]["app_version"]
             changed = True
-        # The old default was a placeholder that 404s against the GitHub API on
-        # every update check; treat it as "not configured".
+        # Historical placeholder that 404s against the GitHub API on every
+        # update check; treat it as "not configured". The literal is the value
+        # older installs actually stored, so it stays spelled that way.
         if db["settings"].get("ota_repo") == "your-username/StanNG":
             db["settings"]["ota_repo"] = ""
             changed = True

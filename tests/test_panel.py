@@ -1,5 +1,5 @@
 """
-StanNG smoke tests.
+Peyk smoke tests.
 
 Covers the flows that used to break silently: input validation on inbounds,
 quota/expiry status, the subscription header, link generation, the SSRF guard
@@ -444,3 +444,57 @@ def test_forwarded_proto_drives_link_scheme(client):
                    headers={"x-forwarded-proto": "https", "x-forwarded-host": "vpn.example.com"}).json()
     assert r["sub_url"] == f"https://vpn.example.com/sub/{ib['uid']}"
     assert r["status_url"] == f"https://vpn.example.com/status/{ib['uid']}"
+
+
+# ------------------------------------------------------------------ 2.0 rename
+def test_legacy_env_names_still_work(monkeypatch):
+    """2.0 renamed STANNG_* to PEYK_*. The old names must keep working: a
+    deployment with STANNG_DATA_DIR set would otherwise come up pointing at an
+    empty database the moment it updated."""
+    monkeypatch.delenv("PEYK_PANEL_NAME", raising=False)
+    monkeypatch.delenv("STANNG_PANEL_NAME", raising=False)
+    assert main._env_str("PANEL_NAME", "fallback") == "fallback"
+
+    monkeypatch.setenv("STANNG_PANEL_NAME", "FromLegacy")
+    assert main._env_str("PANEL_NAME", "fallback") == "FromLegacy"
+
+    # the new name wins when both are present
+    monkeypatch.setenv("PEYK_PANEL_NAME", "FromNew")
+    assert main._env_str("PANEL_NAME", "fallback") == "FromNew"
+
+
+def test_legacy_env_names_work_for_integers(monkeypatch):
+    monkeypatch.delenv("PEYK_PROXY_HOPS", raising=False)
+    monkeypatch.setenv("STANNG_PROXY_HOPS", "3")
+    assert main._env_int("PROXY_HOPS", 1) == 3
+    monkeypatch.setenv("PEYK_PROXY_HOPS", "2")
+    assert main._env_int("PROXY_HOPS", 1) == 2
+    monkeypatch.setenv("PEYK_PROXY_HOPS", "not-a-number")
+    assert main._env_int("PROXY_HOPS", 1) == 1
+
+
+def test_legacy_data_dir_is_honoured():
+    """The single most damaging thing the rename could have broken."""
+    import storage
+    default = storage.resolve_data_dir({})
+    assert default.endswith("data")
+    assert storage.resolve_data_dir({"STANNG_DATA_DIR": "/legacy"}) == "/legacy"
+    assert storage.resolve_data_dir({"PEYK_DATA_DIR": "/new"}) == "/new"
+    # new name wins when both are set
+    assert storage.resolve_data_dir(
+        {"PEYK_DATA_DIR": "/new", "STANNG_DATA_DIR": "/legacy"}) == "/new"
+
+
+def test_platform_env_vars_are_not_prefixed(monkeypatch):
+    """PORT and friends are injected by Railway/Render under plain names.
+
+    Reading them through the PEYK_/STANNG_ lookup made the server bind 8000
+    regardless of what the platform asked for, so it came up healthy and
+    never received a single request.
+    """
+    monkeypatch.setenv("PORT", "9123")
+    monkeypatch.delenv("PEYK_PORT", raising=False)
+    monkeypatch.delenv("STANNG_PORT", raising=False)
+    assert main._platform_env("PORT", 8000) == "9123"
+    # and the prefixed lookup must NOT see it
+    assert main._env_raw("PORT") is None
