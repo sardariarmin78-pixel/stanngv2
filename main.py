@@ -2349,6 +2349,13 @@ def _serve():
         ws_ping_timeout=20,
     )
 
+    # Print before binding: if the platform reports "no port detected", this
+    # line in the deploy log is what tells you which port was actually asked
+    # for and how many processes are competing to come up.
+    print(f"[peyk] v{APP_VERSION} binding {host}:{port} "
+          f"({WORKER_COUNT} worker{'s' if WORKER_COUNT != 1 else ''}, "
+          f"{cluster.available_cpus():.2f} cpu available)", flush=True)
+
     if not MULTIPROCESS:
         uvicorn.run("main:app", **kwargs)
         return
@@ -2356,7 +2363,6 @@ def _serve():
     # Workers each bind the same port; the kernel spreads accepts across
     # them, which is what lifts the relay off a single core.
     cluster.cleanup_journals(RUNTIME_DIR)
-    print(f"[peyk] starting {WORKER_COUNT} workers on {host}:{port}", flush=True)
     uvicorn.run("main:app", workers=WORKER_COUNT, **kwargs)
 
 

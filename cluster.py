@@ -213,15 +213,90 @@ def cleanup_journals(directory: str):
             pass
 
 
-def resolve_workers(setting, cpu_count: Optional[int] = None) -> int:
+def _read_first(path: str):
+    try:
+        with open(path, "r") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def cgroup_cpu_quota():
+    """The container's CPU allowance, or None when unrestricted.
+
+    os.cpu_count() reports the *host's* cores inside a container, so on a
+    platform like Railway it happily says 8 while the container is allowed a
+    fraction of one. Spawning a worker per reported core there is slower than
+    running single-process: every worker loads the whole app on a starved
+    CPU, startup outlasts the platform's port detection, and the deploy is
+    reported as failing to expose a port.
+    """
+    # cgroup v2: "<quota> <period>", or "max <period>" when unrestricted.
+    v2 = _read_first("/sys/fs/cgroup/cpu.max")
+    if v2:
+        parts = v2.split()
+        if len(parts) == 2 and parts[0] != "max":
+            try:
+                quota, period = int(parts[0]), int(parts[1])
+                if quota > 0 and period > 0:
+                    return quota / period
+            except ValueError:
+                pass
+        elif parts and parts[0] == "max":
+            return None
+
+    # cgroup v1: separate quota and period files; -1 means unrestricted.
+    quota_raw = _read_first("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+    period_raw = _read_first("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+    if quota_raw and period_raw:
+        try:
+            quota, period = int(quota_raw), int(period_raw)
+            if quota > 0 and period > 0:
+                return quota / period
+        except ValueError:
+            pass
+    return None
+
+
+def available_cpus() -> float:
+    """Effective cores this process may use.
+
+    Takes the smallest of the cgroup quota, the scheduler affinity mask and
+    the reported core count — each can be the binding constraint.
+    """
+    candidates = []
+
+    quota = cgroup_cpu_quota()
+    if quota:
+        candidates.append(quota)
+
+    # Honour taskset/cpuset restrictions where the platform applies them.
+    try:
+        candidates.append(float(len(os.sched_getaffinity(0))))
+    except (AttributeError, OSError):
+        pass
+
+    reported = os.cpu_count() or 1
+    candidates.append(float(reported))
+
+    return max(0.1, min(candidates))
+
+
+def resolve_workers(setting, cpu_count=None) -> int:
     """Translate the WORKERS setting into a process count.
 
-    "auto" uses every core, which is the point of the exercise, but is capped
-    so a 64-core box does not spawn 64 copies of a JSON database.
+    "auto" spreads the relay over the cores the container actually has, capped
+    so a large host does not spawn dozens of copies of a JSON database. Below
+    roughly two effective cores it stays single-process: extra workers there
+    only add memory and startup time with no throughput to gain.
     """
-    cores = cpu_count or (os.cpu_count() or 1)
+    cores = float(cpu_count) if cpu_count is not None else available_cpus()
+
     if setting in (None, "", "auto"):
-        return max(1, min(8, cores))
+        if cores < 2:
+            return 1
+        return max(1, min(8, int(cores)))
+
     try:
         n = int(setting)
     except (TypeError, ValueError):
