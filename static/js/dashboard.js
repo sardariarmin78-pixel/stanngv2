@@ -49,6 +49,8 @@
     set('settingNotifyPercent', s.notify_quota_percent != null ? s.notify_quota_percent : 80);
     check('settingNotifyExpiry', s.notify_expiry_enabled !== false);
     check('settingAutoBackup', !!s.auto_backup_enabled);
+    check('settingUserbotEnabled', !!s.userbot_enabled);
+    set('settingUserbotToken', s.userbot_token || '');
     set('settingBackupHours', s.auto_backup_hours != null ? s.auto_backup_hours : 6);
     set('settingNotifyDays', s.notify_expiry_days != null ? s.notify_expiry_days : 3);
     applyFragmentFieldState();
@@ -76,6 +78,7 @@
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security') { loadTwofaStatus(); loadLoginLog(); }
     if (name === 'settings') loadBackupStatus();
+    if (name === 'notifications') loadUserbotStatus();
     closeSidebarMobile();
     PEYK.playSfx('open', 0.25);
   }
@@ -1170,6 +1173,41 @@
     f.style.pointerEvents = on ? 'auto' : 'none';
   }
   $('settingFragmentEnabled').addEventListener('change', applyFragmentFieldState);
+
+  // ---------------- user bot ----------------
+  async function loadUserbotStatus() {
+    try {
+      const r = await PEYK.api('/api/userbot');
+      const badge = $('ubBadge');
+      const on = r.enabled && r.configured;
+      badge.textContent = PEYK.t(on ? 'ub_on' : 'ub_off');
+      badge.className = 'pill ' + (on ? 'pill-on' : 'pill-muted');
+      $('ubBound').textContent =
+        PEYK.t('ub_bound_users').replace('{n}', r.bound_users || 0);
+      // The bot hands out subscription links, which need a public domain.
+      $('ubDomainWarning').style.display =
+        (r.configured && !r.public_domain_set) ? '' : 'none';
+    } catch (e) { /* non-fatal */ }
+  }
+
+  $('saveUserbotBtn').addEventListener('click', () => {
+    saveSettings('saveUserbotBtn', {
+      userbot_token: $('settingUserbotToken').value.trim(),
+      userbot_enabled: $('settingUserbotEnabled').checked,
+    }, loadUserbotStatus);
+  });
+
+  $('testUserbotBtn').addEventListener('click', async () => {
+    const btn = $('testUserbotBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/userbot/test', { method: 'POST' });
+      PEYK.toast(PEYK.t('ub_connected').replace('{name}', '@' + (r.username || '')), 'success', 6000);
+    } catch (e) {
+      const msg = e.detail === 'not-configured' ? PEYK.t('ub_no_token') : (e.detail || 'error');
+      PEYK.toast(msg, 'error', 7000);
+    } finally { PEYK.setLoading(btn, false); }
+  });
 
   // ---------------- telegram backup ----------------
   async function loadBackupStatus() {

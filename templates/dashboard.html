@@ -403,6 +403,39 @@
             </div>
           </div>
 
+          <div class="col-12 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-users"/></svg><span data-i18n="ub_title">ربات کاربران</span></h3>
+              <span class="pill pill-muted" id="ubBadge" data-i18n="ub_off">خاموش</span>
+            </div>
+            <div class="win-body">
+              <div class="small muted mb-16" data-i18n="ub_hint">یک ربات جدا برای مشتری‌ها. کاربر با دستور /bind کد اشتراکش را وصل می‌کند و بعد خودش حجم و کانفیگش را می‌گیرد بدون اینکه به شما پیام بدهد. این ربات فقط می‌تواند بخواند — هیچ دستوری برای ساخت، تمدید یا حذف ندارد.</div>
+              <div class="grid">
+                <div class="col-6">
+                  <div class="field">
+                    <label data-i18n="ub_token">توکن ربات کاربران</label>
+                    <input class="input mono" type="password" id="settingUserbotToken" placeholder="123456789:AA..." style="direction:ltr;" autocomplete="off">
+                    <div class="small muted mt-8" data-i18n="ub_token_hint">با ربات هشدارها فرق دارد؛ یک ربات جدا در BotFather بسازید.</div>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="setting-row">
+                    <div>
+                      <div class="title" data-i18n="ub_enable">فعال بودن ربات</div>
+                      <div class="hint" id="ubBound">—</div>
+                    </div>
+                    <label class="switch"><input type="checkbox" id="settingUserbotEnabled"><span class="track"><span class="thumb"></span></span></label>
+                  </div>
+                </div>
+              </div>
+              <div class="inline-error show" id="ubDomainWarning" style="display:none; border-color:var(--warn); background:var(--warn-dim); color:var(--warn);" data-i18n="ub_needs_domain">تا وقتی «دامنه عمومی» در تنظیمات پر نشود، ربات نمی‌تواند لینک اشتراک بدهد.</div>
+              <div class="flex gap-8 flex-wrap mt-12">
+                <button class="btn btn-primary btn-sm" id="saveUserbotBtn"><span data-i18n="save">ذخیره</span></button>
+                <button class="btn btn-sm" id="testUserbotBtn"><svg><use href="#icon-check-circle"/></svg><span data-i18n="ub_test">بررسی اتصال</span></button>
+              </div>
+            </div>
+          </div>
+
           <div class="col-6 win">
             <div class="win-head"><h3><svg><use href="#icon-bell"/></svg><span data-i18n="notify_rules_title">قوانین هشدار</span></h3></div>
             <div class="win-body">

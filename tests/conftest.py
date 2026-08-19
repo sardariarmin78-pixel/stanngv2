@@ -31,3 +31,12 @@ def reset_panel():
     main.runtime["pending_traffic"].clear()
     main.runtime["pending_requests"].clear()
     main.runtime["colo"] = {"value": "FRA", "at": float("inf")}  # no outbound call
+
+
+import pytest
+
+
+@pytest.fixture
+def anyio_backend():
+    """Run @pytest.mark.anyio tests on asyncio only; trio is not installed."""
+    return "asyncio"

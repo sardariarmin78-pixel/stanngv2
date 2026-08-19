@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 7  # v7: off-box backup bookkeeping
+SCHEMA_VERSION = 8  # v8: user-facing telegram bot
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -104,6 +104,9 @@ DEFAULT_DB: Dict[str, Any] = {
         # ---- off-box backup (Railway wipes the disk on every redeploy) ----
         "auto_backup_enabled": False,
         "auto_backup_hours": 6,
+        # ---- self-service bot for end users ----
+        "userbot_enabled": False,
+        "userbot_token": "",
     },
     "inbounds": [],       # list of inbound/user dicts
     "plans": [],          # reusable presets: {id, name, days, quota_gb, max_connections, max_requests}
@@ -115,6 +118,8 @@ DEFAULT_DB: Dict[str, Any] = {
     "login_log": [],      # bounded audit trail: {ts, ip, ok, method, reason}
     "alerts_sent": {},    # "<uid>:<kind>" -> ts, for notification cooldowns
     "last_backup": None,  # {"ts": float, "ok": bool, "detail": str}
+    "bot_bindings": {},   # telegram chat id -> inbound uid
+    "bot_offset": 0,      # last consumed getUpdates id
     "stats": {
         "started_at": time.time(),
         "total_up": 0,
@@ -252,6 +257,12 @@ def normalize_db(db: Dict[str, Any]) -> bool:
             db["endpoints"] = kept_eps
     if not isinstance(db.get("alerts_sent"), dict):
         db["alerts_sent"] = {}
+        changed = True
+    if not isinstance(db.get("bot_bindings"), dict):
+        db["bot_bindings"] = {}
+        changed = True
+    if not isinstance(db.get("bot_offset"), int):
+        db["bot_offset"] = 0
         changed = True
     if not isinstance(db.get("twofa"), dict):
         db["twofa"] = json.loads(json.dumps(DEFAULT_DB["twofa"]))
