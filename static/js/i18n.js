@@ -344,4 +344,23 @@ window.I18N = {
   // ---- v1.9.0: multi-format subscriptions ----
   sub_formats: { fa: "لینک اشتراک برای کلاینت‌های دیگر", en: "Subscription links for other clients" },
   sub_formats_hint: { fa: "لینک اصلی بالا خودش کلاینت را تشخیص می‌دهد؛ این‌ها برای وقتی است که بخواهید فرمت را دستی مشخص کنید. در Clash و sing-box یک گروه «Auto» ساخته می‌شود که خودکار کم‌تأخیرترین لوکیشن را انتخاب می‌کند.", en: "The main link above detects the client automatically; these are for pinning a format by hand. Clash and sing-box get an “Auto” group that picks the lowest-latency location on its own." },
+  // ---- v2.1.0: off-box backup ----
+  tgbk_title: { fa: "پشتیبان خودکار در تلگرام", en: "Automatic Telegram backup" },
+  tgbk_on: { fa: "روشن", en: "On" },
+  tgbk_off: { fa: "خاموش", en: "Off" },
+  tgbk_auto: { fa: "پشتیبان‌گیری خودکار", en: "Automatic backup" },
+  tgbk_interval: { fa: "فاصله (ساعت)", en: "Interval (hours)" },
+  tgbk_now: { fa: "پشتیبان‌گیری الان", en: "Back up now" },
+  tgbk_sent: { fa: "پشتیبان در تلگرام ذخیره شد", en: "Backup sent to Telegram" },
+  tgbk_restore: { fa: "بازیابی از تلگرام", en: "Restore from Telegram" },
+  tgbk_restore_confirm: { fa: "تمام داده‌های فعلی با آخرین پشتیبان تلگرام جایگزین می‌شود و از پنل خارج می‌شوید. ادامه؟", en: "All current data will be replaced by the latest Telegram backup and you will be signed out. Continue?" },
+  tgbk_none_found: { fa: "هیچ پشتیبانی در چت پیدا نشد", en: "No backup found in the chat" },
+  tgbk_bad_file: { fa: "فایل پین‌شده یک پشتیبان معتبر نیست", en: "The pinned file is not a valid backup" },
+  tgbk_never: { fa: "هنوز پشتیبانی گرفته نشده", en: "No backup taken yet" },
+  tgbk_last_ok: { fa: "آخرین پشتیبان", en: "Last backup" },
+  tgbk_last_fail: { fa: "آخرین تلاش ناموفق", en: "Last attempt failed" },
+  tgbk_hint: { fa: "از همان ربات بخش «اعلان‌ها» استفاده می‌شود. فایل دیتابیس در چت شما آپلود و پین می‌شود؛ پین شدن همان چیزی است که به پنل اجازه می‌دهد بعد از ری‌دیپلوی خودش را برگرداند.", en: "Uses the same bot as Notifications. The database file is uploaded to your chat and pinned - pinning is what lets the panel find it again and restore itself after a redeploy." },
+  tgbk_ephemeral_title: { fa: "دیسک این سرور موقتی است", en: "This server's disk is ephemeral" },
+  tgbk_ephemeral_body: { fa: "با هر ری‌دیپلوی، دیتابیس پاک می‌شود و پنل به صفحه راه‌اندازی برمی‌گردد. پشتیبان خودکار را روشن کنید.", en: "Every redeploy wipes the database and the panel returns to the setup screen. Turn automatic backup on." },
+  tgbk_bootstrap_hint: { fa: "برای بازگردانی خودکار بعد از ری‌دیپلوی، توکن ربات و آیدی چت را به‌عنوان متغیر محیطی PEYK_TELEGRAM_BOT_TOKEN و PEYK_TELEGRAM_CHAT_ID هم در سرور ست کنید — تنظیمات داخل دیتابیس بعد از پاک شدن در دسترس نیست.", en: "For unattended recovery after a redeploy, also set the bot token and chat id as PEYK_TELEGRAM_BOT_TOKEN and PEYK_TELEGRAM_CHAT_ID environment variables - settings stored in the database are exactly what is gone." },
 };

@@ -568,6 +568,37 @@
               <button class="btn btn-sm btn-danger" id="restoreBtn"><span data-i18n="settings_restore">بازیابی از فایل</span></button>
             </div>
           </div>
+
+          <div class="col-6 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-telegram"/></svg><span data-i18n="tgbk_title">پشتیبان خودکار در تلگرام</span></h3>
+              <span class="pill pill-muted" id="tgbkBadge" data-i18n="tgbk_off">خاموش</span>
+            </div>
+            <div class="win-body flex-col gap-12">
+              <div class="inline-error show" id="ephemeralWarning" style="display:none; border-color:var(--warn); background:var(--warn-dim); color:var(--warn);">
+                <b data-i18n="tgbk_ephemeral_title">دیسک این سرور موقتی است</b>
+                <div class="mt-8" data-i18n="tgbk_ephemeral_body">با هر ری‌دیپلوی، دیتابیس پاک می‌شود و پنل به صفحه راه‌اندازی برمی‌گردد. پشتیبان خودکار را روشن کنید.</div>
+              </div>
+              <div class="small muted" data-i18n="tgbk_hint">از همان ربات بخش «اعلان‌ها» استفاده می‌شود. فایل دیتابیس در چت شما آپلود و پین می‌شود؛ پین شدن همان چیزی است که به پنل اجازه می‌دهد بعد از ری‌دیپلوی خودش را برگرداند.</div>
+              <div class="setting-row" style="margin-bottom:0;">
+                <div>
+                  <div class="title" data-i18n="tgbk_auto">پشتیبان‌گیری خودکار</div>
+                  <div class="hint" id="tgbkLast">—</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingAutoBackup"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="field" style="margin-bottom:0;">
+                <label data-i18n="tgbk_interval">فاصله (ساعت)</label>
+                <input class="input" type="number" id="settingBackupHours" min="1" max="168" step="1" placeholder="6" style="direction:ltr;">
+              </div>
+              <div class="flex gap-8 flex-wrap">
+                <button class="btn btn-primary btn-sm" id="saveBackupBtn"><span data-i18n="save">ذخیره</span></button>
+                <button class="btn btn-sm" id="backupNowBtn"><svg><use href="#icon-upload"/></svg><span data-i18n="tgbk_now">پشتیبان‌گیری الان</span></button>
+                <button class="btn btn-sm btn-danger" id="tgRestoreBtn"><svg><use href="#icon-download"/></svg><span data-i18n="tgbk_restore">بازیابی از تلگرام</span></button>
+              </div>
+              <div class="small muted" id="tgbkBootstrap" style="display:none;"></div>
+            </div>
+          </div>
         </div>
       </section>
 

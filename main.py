@@ -36,12 +36,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+import backup
 import cluster
 import notify
 import subscription
 import totp
 from colo_map import describe_colo
 from storage import (
+    DATA_DIR as DATA_DIR_PATH,
     MAX_LOGIN_LOG, RUNTIME_DIR, normalize_db, prune_login_attempts, store,
     hash_password_async, verify_password_async,
 )
@@ -89,6 +91,12 @@ def _env_int(name: str, default: int) -> int:
 DEFAULT_PANEL_NAME = _env_str("PANEL_NAME", "Peyk")
 DEFAULT_TELEGRAM_CONTACT = _env_str("TELEGRAM_CONTACT", "https://t.me/rvivl")
 
+# Bootstrap credentials for self-restore. Panel settings live in db.json,
+# which is exactly what is gone after a redeploy, so recovery has to read
+# these from the environment.
+BOOTSTRAP_BOT_TOKEN = _env_str("TELEGRAM_BOT_TOKEN", "")
+BOOTSTRAP_CHAT_ID = _env_str("TELEGRAM_CHAT_ID", "")
+
 SESSION_COOKIE = _env_str("SESSION_COOKIE", "peyk_session")
 SESSION_MAX_AGE = _env_int("SESSION_MAX_AGE", 60 * 60 * 24 * 7)
 LOGIN_MAX_ATTEMPTS = _env_int("LOGIN_MAX_ATTEMPTS", 6)
@@ -105,6 +113,7 @@ DISK_FLUSH_INTERVAL = 15    # seconds: persist the db if anything changed
 ENFORCE_INTERVAL = 10       # seconds: kick sessions that ran past their limits
 COLO_CACHE_TTL = 3600       # seconds: the edge datacentre does not move often
 NOTIFY_INTERVAL = 300       # seconds: scan for quota/expiry alerts
+BACKUP_CHECK_INTERVAL = 900 # seconds: how often to consider an auto-backup
 JOURNAL_INTERVAL = 1        # seconds: publish this worker's runtime slice
 
 # One event loop saturates a single core, and measured aggregate throughput
@@ -158,6 +167,13 @@ async def lifespan(app: FastAPI):
         store.enable_multiprocess()
         runtime["journal"] = cluster.RuntimeJournal(RUNTIME_DIR)
 
+    # Before anything serves traffic: if this container came up with a blank
+    # disk and we have bootstrap credentials, pull the last backup back.
+    try:
+        await _self_restore_if_empty()
+    except Exception as e:
+        print(f"[peyk] self-restore error: {e}", flush=True)
+
     tasks = [
         asyncio.create_task(_periodic_flush()),
         asyncio.create_task(_journal_loop()),
@@ -165,6 +181,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_enforcement_loop()),
         asyncio.create_task(_keep_alive_loop()),
         asyncio.create_task(_notify_loop()),
+        asyncio.create_task(_backup_loop()),
     ]
     try:
         yield
@@ -663,6 +680,94 @@ async def _notify_loop():
             await asyncio.sleep(30)
 
 
+def _backup_credentials(db) -> tuple:
+    """Panel settings win; environment is the fallback used at boot."""
+    settings = db.get("settings") or {}
+    token = (settings.get("telegram_bot_token") or "").strip() or BOOTSTRAP_BOT_TOKEN
+    chat = (settings.get("telegram_chat_id") or "").strip() or BOOTSTRAP_CHAT_ID
+    return token, chat
+
+
+async def _run_backup(db, reason: str = "auto") -> dict:
+    """Ship the current database to Telegram and record the outcome."""
+    token, chat = _backup_credentials(db)
+    if not token or not chat:
+        raise HTTPException(400, "not-configured")
+
+    payload = store.snapshot_json()
+    name = backup.backup_filename(brand(db)["panel_name"])
+    caption = backup.summarise(db)
+
+    try:
+        result = await backup.send_backup(token, chat, payload, name, caption)
+        record = {"ts": time.time(), "ok": True, "detail": reason,
+                  "pinned": result.get("pinned", False)}
+    except backup.BackupError as e:
+        record = {"ts": time.time(), "ok": False, "detail": str(e)}
+
+    def _apply(db):
+        db["last_backup"] = record
+
+    await store.mutate(_apply, persist=False)
+    if not record["ok"]:
+        raise HTTPException(502, f"backup-failed: {record['detail']}")
+    return record
+
+
+async def _self_restore_if_empty():
+    """After a redeploy the disk is blank. Pull the pinned backup back in.
+
+    Only ever runs against a database with no admin — a configured panel is
+    never overwritten by whatever happens to be pinned in a chat.
+    """
+    db = await store.get()
+    if db.get("admin"):
+        return False
+    if not (BOOTSTRAP_BOT_TOKEN and BOOTSTRAP_CHAT_ID):
+        return False
+    try:
+        restored = await backup.restore_latest(BOOTSTRAP_BOT_TOKEN, BOOTSTRAP_CHAT_ID)
+    except backup.BackupError as e:
+        print(f"[peyk] self-restore skipped: {e}", flush=True)
+        return False
+    if not restored or not restored.get("admin"):
+        return False
+
+    normalize_db(restored)
+    await store.replace(restored)
+    print(f"[peyk] restored {len(restored.get('inbounds', []))} users "
+          f"from the pinned Telegram backup", flush=True)
+    return True
+
+
+async def _backup_loop():
+    while True:
+        try:
+            await asyncio.sleep(BACKUP_CHECK_INTERVAL)
+            db = await store.get()
+            settings = db.get("settings") or {}
+            if not settings.get("auto_backup_enabled"):
+                continue
+            token, chat = _backup_credentials(db)
+            if not token or not chat:
+                continue
+            try:
+                hours = max(1, min(168, int(settings.get("auto_backup_hours", 6))))
+            except (TypeError, ValueError):
+                hours = 6
+            last = db.get("last_backup") or {}
+            if last.get("ok") and time.time() - last.get("ts", 0) < hours * 3600:
+                continue
+            try:
+                await _run_backup(db, reason="scheduled")
+            except HTTPException:
+                pass
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(60)
+
+
 async def _keep_alive_loop():
     """Ping our own public URL so free-tier hosts don't idle the service out.
 
@@ -941,6 +1046,7 @@ VALID_ALPN = {"http/1.1", "h2,http/1.1", "h3,h2,http/1.1"}
 BOOL_SETTINGS = {
     "keep_alive", "fragment_enabled", "allow_private_destinations",
     "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
+    "auto_backup_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
@@ -954,6 +1060,7 @@ INT_SETTINGS = {
     "notify_quota_percent": (1, 100),
     "notify_expiry_days": (0, 60),
     "history_days": (1, 90),
+    "auto_backup_hours": (1, 168),
 }
 OTA_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$")
 
@@ -2026,6 +2133,78 @@ async def api_restore(request: Request, user: str = Depends(require_auth)):
     resp = JSONResponse({"ok": True, "inbounds": len(incoming["inbounds"])})
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
+
+
+# ------------------------------------------------------------------ off-box backup
+@app.get("/api/backup/telegram")
+async def api_backup_status(user: str = Depends(require_auth)):
+    db = await store.get()
+    token, chat = _backup_credentials(db)
+    settings = db.get("settings") or {}
+    return {
+        "configured": bool(token and chat),
+        "bootstrap_configured": bool(BOOTSTRAP_BOT_TOKEN and BOOTSTRAP_CHAT_ID),
+        "auto_enabled": bool(settings.get("auto_backup_enabled")),
+        "interval_hours": settings.get("auto_backup_hours", 6),
+        "last": db.get("last_backup"),
+        "storage_is_ephemeral": _storage_looks_ephemeral(),
+    }
+
+
+@app.post("/api/backup/telegram")
+async def api_backup_now(user: str = Depends(require_auth)):
+    db = await store.get()
+    record = await _run_backup(db, reason="manual")
+    return {"ok": True, "last": record}
+
+
+@app.post("/api/backup/telegram/restore")
+async def api_backup_restore(user: str = Depends(require_auth)):
+    db = await store.get()
+    token, chat = _backup_credentials(db)
+    if not token or not chat:
+        raise HTTPException(400, "not-configured")
+    try:
+        restored = await backup.restore_latest(token, chat)
+    except backup.BackupError as e:
+        raise HTTPException(502, f"restore-failed: {e}")
+    if not restored:
+        raise HTTPException(404, "no-backup-found")
+    # Validate here, not only in the transport layer. getChat returns whatever
+    # happens to be pinned, and normalize_db would happily turn an unrelated
+    # JSON file into a well-formed database with no admin — wiping the panel
+    # and locking the owner out.
+    if not isinstance(restored.get("admin"), dict) or not restored.get("secret_key"):
+        raise HTTPException(400, "not-a-peyk-backup")
+
+    normalize_db(restored)
+    for uid in list(runtime["active"].keys()):
+        await _disconnect_uid(uid)
+    runtime["active"].clear()
+    runtime["pending_traffic"].clear()
+    runtime["pending_requests"].clear()
+    await store.replace(restored)
+
+    resp = JSONResponse({"ok": True, "inbounds": len(restored.get("inbounds", []))})
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+    return resp
+
+
+def _storage_looks_ephemeral() -> bool:
+    """Best-effort guess at whether the data directory survives a redeploy.
+
+    Railway mounts volumes at an explicit path and exposes it in the
+    environment; without that, everything written is discarded on the next
+    deploy. A false positive only means an extra warning in the panel.
+    """
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") or os.environ.get("RENDER_DISK_PATH")
+    if mount:
+        try:
+            return not os.path.abspath(DATA_DIR_PATH).startswith(os.path.abspath(mount))
+        except Exception:
+            return False
+    # Outside a known platform we cannot tell; only warn where we know it bites.
+    return bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
 
 
 # ------------------------------------------------------------------ system / stats
