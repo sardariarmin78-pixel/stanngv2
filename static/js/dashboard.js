@@ -48,6 +48,8 @@
     check('settingNotifyQuota', s.notify_quota_enabled !== false);
     set('settingNotifyPercent', s.notify_quota_percent != null ? s.notify_quota_percent : 80);
     check('settingNotifyExpiry', s.notify_expiry_enabled !== false);
+    check('settingAutoBackup', !!s.auto_backup_enabled);
+    set('settingBackupHours', s.auto_backup_hours != null ? s.auto_backup_hours : 6);
     set('settingNotifyDays', s.notify_expiry_days != null ? s.notify_expiry_days : 3);
     applyFragmentFieldState();
   }).catch(() => { window.location.href = '/login'; });
@@ -73,6 +75,7 @@
     if (name === 'plans') loadPlans();
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security') { loadTwofaStatus(); loadLoginLog(); }
+    if (name === 'settings') loadBackupStatus();
     closeSidebarMobile();
     PEYK.playSfx('open', 0.25);
   }
@@ -1167,6 +1170,68 @@
     f.style.pointerEvents = on ? 'auto' : 'none';
   }
   $('settingFragmentEnabled').addEventListener('change', applyFragmentFieldState);
+
+  // ---------------- telegram backup ----------------
+  async function loadBackupStatus() {
+    try {
+      const r = await PEYK.api('/api/backup/telegram');
+      const badge = $('tgbkBadge');
+      const on = !!r.auto_enabled && r.configured;
+      badge.textContent = PEYK.t(on ? 'tgbk_on' : 'tgbk_off');
+      badge.className = 'pill ' + (on ? 'pill-on' : 'pill-muted');
+
+      // Only warn when it actually bites: ephemeral disk, nothing protecting it.
+      $('ephemeralWarning').style.display =
+        (r.storage_is_ephemeral && !(r.configured && r.auto_enabled)) ? '' : 'none';
+
+      const last = r.last;
+      $('tgbkLast').textContent = last
+        ? PEYK.t(last.ok ? 'tgbk_last_ok' : 'tgbk_last_fail') + ': ' +
+          new Date(last.ts * 1000).toLocaleString(PEYK.getLang() === 'fa' ? 'fa-IR' : 'en-US') +
+          (last.ok ? '' : ' - ' + last.detail)
+        : PEYK.t('tgbk_never');
+
+      const boot = $('tgbkBootstrap');
+      const needsBootstrap = r.storage_is_ephemeral && !r.bootstrap_configured;
+      boot.style.display = needsBootstrap ? '' : 'none';
+      if (needsBootstrap) boot.textContent = PEYK.t('tgbk_bootstrap_hint');
+    } catch (e) { /* non-fatal */ }
+  }
+
+  $('saveBackupBtn').addEventListener('click', () => {
+    saveSettings('saveBackupBtn', {
+      auto_backup_enabled: $('settingAutoBackup').checked,
+      auto_backup_hours: parseInt($('settingBackupHours').value, 10) || 6,
+    }, loadBackupStatus);
+  });
+
+  $('backupNowBtn').addEventListener('click', async () => {
+    const btn = $('backupNowBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      await PEYK.api('/api/backup/telegram', { method: 'POST' });
+      PEYK.toast(PEYK.t('tgbk_sent'), 'success');
+      loadBackupStatus();
+    } catch (e) {
+      const msg = e.detail === 'not-configured' ? PEYK.t('notify_not_configured') : (e.detail || 'error');
+      PEYK.toast(msg, 'error', 7000);
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+  $('tgRestoreBtn').addEventListener('click', async () => {
+    if (!confirm(PEYK.t('tgbk_restore_confirm'))) return;
+    const btn = $('tgRestoreBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      await PEYK.api('/api/backup/telegram/restore', { method: 'POST' });
+      PEYK.toast(PEYK.t('settings_restored'), 'success', 4000);
+      setTimeout(function () { window.location.href = '/login'; }, 1400);
+    } catch (e) {
+      const map = { 'no-backup-found': 'tgbk_none_found', 'not-a-peyk-backup': 'tgbk_bad_file' };
+      PEYK.toast(map[e.detail] ? PEYK.t(map[e.detail]) : (e.detail || 'error'), 'error', 7000);
+      PEYK.setLoading(btn, false);
+    }
+  });
 
   // ---------------- backup / restore ----------------
   $('backupBtn').addEventListener('click', async () => {
