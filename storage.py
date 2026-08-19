@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 8  # v8: user-facing telegram bot
+SCHEMA_VERSION = 9  # v9: xray-core data plane
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -107,6 +107,9 @@ DEFAULT_DB: Dict[str, Any] = {
         # ---- self-service bot for end users ----
         "userbot_enabled": False,
         "userbot_token": "",
+        # ---- xray-core data plane (ignored when no binary is installed) ----
+        # vless-ws | vmess-ws | vless-xhttp
+        "xray_transports": ["vless-ws", "vless-xhttp"],
     },
     "inbounds": [],       # list of inbound/user dicts
     "plans": [],          # reusable presets: {id, name, days, quota_gb, max_connections, max_requests}
