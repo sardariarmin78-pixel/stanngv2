@@ -3,22 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>StanNG · Setup</title>
+<title>{{ panel_name }} · Setup</title>
 <link rel="icon" href="/static/img/favicon-32.png">
 <link rel="apple-touch-icon" href="/static/img/favicon-180.png">
-<link rel="stylesheet" href="/static/css/fonts.css">
-<link rel="stylesheet" href="/static/css/theme.css">
-<link rel="stylesheet" href="/static/css/dashboard.css">
+<link rel="stylesheet" href="/static/css/fonts.css?v={{ app_version }}">
+<link rel="stylesheet" href="/static/css/theme.css?v={{ app_version }}">
+<link rel="stylesheet" href="/static/css/dashboard.css?v={{ app_version }}">
 </head>
 <body>
 {% include "_icons.html" %}
-<a class="telegram-fab" href="https://t.me/rvivl" target="_blank" rel="noopener" title="پشتیبانی تلگرام / Telegram Support">
+<a class="telegram-fab" href="{{ telegram_contact }}" target="_blank" rel="noopener" title="پشتیبانی تلگرام / Telegram Support">
   <svg><use href="#icon-telegram"/></svg>
 </a>
 <div class="auth-shell">
   <div class="sparkle-field"></div>
   <div class="auth-card">
-    <img class="auth-logo" src="/static/img/logo-square.png" alt="StanNG">
+    <img class="auth-logo" src="/static/img/logo-square.png" alt="{{ panel_name }}">
     <div class="brand-title" data-i18n="setup_title">برپایی اولیه پنل</div>
     <div class="brand-sub" data-i18n="setup_sub">یک نام کاربری و رمز عبور برای دسترسی به پنل خود بسازید</div>
 
@@ -66,62 +66,8 @@
   </div>
 </div>
 
-<script src="/static/js/i18n.js"></script>
-<script src="/static/js/common.js"></script>
-<script>
-document.querySelectorAll('.lang-toggle button').forEach(btn => {
-  btn.addEventListener('click', () => { STANNG.setLang(btn.dataset.lang); STANNG.playSfx('toggle', 0.3); });
-});
-document.getElementById('themeToggle').addEventListener('click', () => {
-  const next = STANNG.getTheme() === 'dark' ? 'light' : 'dark';
-  STANNG.setTheme(next);
-  STANNG.playSfx('toggle', 0.3);
-});
-document.querySelectorAll('[data-toggle-for]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const input = document.getElementById(btn.dataset.toggleFor);
-    const isPw = input.type === 'password';
-    input.type = isPw ? 'text' : 'password';
-    btn.innerHTML = isPw
-      ? '<svg width="18" height="18"><use href="#icon-eye-off"/></svg>'
-      : '<svg width="18" height="18"><use href="#icon-eye"/></svg>';
-  });
-});
-
-fetch('/api/setup-status').then(r => r.json()).then(d => {
-  if (!d.needs_setup) window.location.href = '/login';
-});
-
-const form = document.getElementById('setupForm');
-const btn = document.getElementById('setupBtn');
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const username = document.getElementById('username').value.trim();
-  const password = document.getElementById('password').value;
-  const password2 = document.getElementById('password2').value;
-  const mismatchEl = document.getElementById('mismatchError');
-  mismatchEl.classList.remove('show');
-
-  if (password !== password2) {
-    mismatchEl.classList.add('show');
-    STANNG.shake(form);
-    STANNG.playSfx('error');
-    return;
-  }
-  STANNG.setLoading(btn, true);
-  try {
-    await STANNG.api('/api/setup', { method: 'POST', body: { username, password } });
-    STANNG.toast(STANNG.t('setup_done'), 'success');
-    setTimeout(() => window.location.href = '/dashboard', 700);
-  } catch (err) {
-    STANNG.setLoading(btn, false);
-    STANNG.shake(form);
-    let msg = err.detail || 'error';
-    if (msg === 'invalid-username') msg = STANNG.t('setup_username_hint');
-    else if (msg === 'weak-password') msg = STANNG.t('setup_password_hint');
-    STANNG.toast(msg, 'error');
-  }
-});
-</script>
+<script src="/static/js/i18n.js?v={{ app_version }}"></script>
+<script src="/static/js/common.js?v={{ app_version }}"></script>
+<script src="/static/js/setup.js?v={{ app_version }}"></script>
 </body>
 </html>

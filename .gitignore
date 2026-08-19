@@ -1,0 +1,24 @@
+# ---- runtime data (contains admin password hash + session secret key) ----
+data/
+*.db.json
+*.tmp-*
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.Python
+
+# ---- local config ----
+.env
+.env.*
+!.env.example
+
+# ---- editors / os ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -6,9 +6,9 @@
 <title>{{ panel_name }} · Dashboard</title>
 <link rel="icon" href="/static/img/favicon-32.png">
 <link rel="apple-touch-icon" href="/static/img/favicon-180.png">
-<link rel="stylesheet" href="/static/css/fonts.css">
-<link rel="stylesheet" href="/static/css/theme.css">
-<link rel="stylesheet" href="/static/css/dashboard.css">
+<link rel="stylesheet" href="/static/css/fonts.css?v={{ app_version }}">
+<link rel="stylesheet" href="/static/css/theme.css?v={{ app_version }}">
+<link rel="stylesheet" href="/static/css/dashboard.css?v={{ app_version }}">
 </head>
 <body>
 {% include "_icons.html" %}
@@ -236,7 +236,7 @@
               </div>
               <div class="field">
                 <label data-i18n="settings_ota_repo">مخزن گیت‌هاب برای آپدیت</label>
-                <input class="input" type="text" id="settingOtaRepo" placeholder="username/StanNG" style="direction:ltr;">
+                <input class="input" type="text" id="settingOtaRepo" placeholder="username/repo" style="direction:ltr;">
               </div>
               <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:12px 14px;">
                 <div>
@@ -304,6 +304,58 @@
               <button class="btn btn-primary mt-12" id="saveAdvancedBtn"><span data-i18n="save">ذخیره</span></button>
             </div>
           </div>
+
+          <!-- ---------- BRANDING ---------- -->
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-bolt"/></svg><span data-i18n="settings_brand_title">برندینگ</span></h3></div>
+            <div class="win-body">
+              <div class="small muted mb-16" data-i18n="settings_brand_hint">نام پنل و لینک پشتیبانی در تمام صفحات نمایش داده می‌شود. خالی بگذارید تا مقدار پیش‌فرض سرور استفاده شود.</div>
+              <div class="field">
+                <label data-i18n="settings_panel_name">نام پنل</label>
+                <input class="input" type="text" id="settingPanelName" maxlength="40" placeholder="StanNG">
+              </div>
+              <div class="field">
+                <label data-i18n="settings_telegram">لینک پشتیبانی تلگرام</label>
+                <input class="input" type="text" id="settingTelegram" maxlength="200" placeholder="@username" style="direction:ltr;">
+              </div>
+              <button class="btn btn-primary mt-12" id="saveBrandBtn"><span data-i18n="save">ذخیره</span></button>
+            </div>
+          </div>
+
+          <!-- ---------- RELAY SAFETY ---------- -->
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-shield"/></svg><span data-i18n="settings_relay_title">امنیت رله</span></h3></div>
+            <div class="win-body">
+              <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:12px 14px;">
+                <div>
+                  <div style="font-weight:700; font-size:13.5px;" data-i18n="settings_allow_private">اجازه اتصال به شبکه داخلی</div>
+                  <div class="small muted mt-8" data-i18n="settings_allow_private_hint">خاموش بماند. اگر روشن شود، کاربران می‌توانند به 127.0.0.1 و سرویس متادیتای سرور (169.254.169.254) دسترسی پیدا کنند.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingAllowPrivate"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="field">
+                <label data-i18n="settings_idle_timeout">قطع اتصال بی‌استفاده (ثانیه)</label>
+                <input class="input" type="number" id="settingIdleTimeout" min="0" max="86400" step="30" placeholder="600" style="direction:ltr;">
+                <div class="small muted mt-8" data-i18n="settings_idle_timeout_hint">۰ یعنی هرگز. اتصال‌های مرده سهمیه «اتصال همزمان» کاربر را اشغال می‌کنند.</div>
+              </div>
+              <button class="btn btn-primary mt-12" id="saveRelayBtn"><span data-i18n="save">ذخیره</span></button>
+            </div>
+          </div>
+
+          <!-- ---------- BACKUP / RESTORE ---------- -->
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-download"/></svg><span data-i18n="settings_backup_title">پشتیبان‌گیری</span></h3></div>
+            <div class="win-body flex-col gap-12">
+              <div class="small muted" data-i18n="settings_backup_hint">فایل پشتیبان شامل کاربران، تنظیمات و هش رمز ادمین است. آن را جای امنی نگه دارید.</div>
+              <button class="btn btn-azure" id="backupBtn"><svg width="16" height="16"><use href="#icon-download"/></svg><span data-i18n="settings_backup_download">دانلود فایل پشتیبان</span></button>
+              <hr style="border-color:var(--border-soft); width:100%; margin:4px 0;">
+              <div class="small muted" data-i18n="settings_restore_hint">بازیابی، تمام داده‌های فعلی را جایگزین می‌کند و شما را از پنل خارج می‌کند.</div>
+              <input type="file" id="restoreFile" accept="application/json,.json" style="display:none;">
+              <button class="btn btn-ghost" id="restoreBtn"><span data-i18n="settings_restore">بازیابی از فایل</span></button>
+              <hr style="border-color:var(--border-soft); width:100%; margin:4px 0;">
+              <button class="btn btn-ghost" id="logoutAllBtn" style="color:var(--crimson)"><span data-i18n="settings_logout_all">خروج از همه دستگاه‌ها</span></button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -356,6 +408,10 @@
             <span class="small" data-i18n="inb_strict_ip">قفل روی اولین IP</span>
             <label class="switch"><input type="checkbox" id="fStrictIp"><span class="track"><span class="thumb"></span></span></label>
           </div>
+          <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:10px 12px; margin-top:20px;">
+            <span class="small" data-i18n="inb_enabled">فعال</span>
+            <label class="switch"><input type="checkbox" id="fEnabled" checked><span class="track"><span class="thumb"></span></span></label>
+          </div>
           <div class="field span-2">
             <label data-i18n="inb_note">یادداشت</label>
             <input class="input" type="text" id="fNote" maxlength="200">
@@ -370,7 +426,33 @@
   </div>
 </div>
 
-<!-- ============ MODAL: Links / QR (نسخه ۱.۴.۱) ============ -->
+<!-- ============ MODAL: Renew ============ -->
+<div class="modal-overlay" id="renewModal">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <h3 data-i18n="inb_renew">تمدید اشتراک</h3>
+      <button class="icon-btn" data-close-modal="renewModal"><svg width="16" height="16"><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="renewUid">
+      <div class="small muted mb-16" data-i18n="inb_renew_hint">روزها به تاریخ انقضای فعلی اضافه می‌شود. اگر اشتراک منقضی شده باشد، از همین حالا حساب می‌شود.</div>
+      <div class="field">
+        <label data-i18n="inb_renew_days">تعداد روز</label>
+        <input class="input" type="number" id="renewDays" min="1" max="3650" step="1" value="30" style="direction:ltr;">
+      </div>
+      <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:10px 12px;">
+        <span class="small" data-i18n="inb_renew_reset">ریست کردن حجم مصرفی</span>
+        <label class="switch"><input type="checkbox" id="renewResetUsage" checked><span class="track"><span class="thumb"></span></span></label>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="renewModal"><span data-i18n="cancel">انصراف</span></button>
+      <button class="btn btn-primary" id="renewSaveBtn"><span data-i18n="inb_renew">تمدید اشتراک</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: Links / QR ============ -->
 <div class="modal-overlay" id="linksModal">
   <div class="modal">
     <div class="modal-head">
@@ -394,7 +476,7 @@
         <div class="link-row"><code id="linkSub"></code><button class="icon-btn btn-sm" data-copy="linkSub"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
         <div class="small muted mt-8" style="color:var(--gold-300);">
           <svg width="14" height="14" style="vertical-align:-2px;"><use href="#icon-info"/></svg>
-          <span data-i18n="inb_sub_note">لینک اشتراک شامل دو کانفیگ نمایشی (وضعیت مصرف و پیام رایگان) به‌همراه کانفیگ TLS است.</span>
+          <span data-i18n="inb_sub_note">حجم و تاریخ انقضا از طریق هدر استاندارد Subscription-Userinfo مستقیماً داخل کلاینت نمایش داده می‌شود.</span>
         </div>
       </div>
       
@@ -410,14 +492,15 @@
         <div class="link-row"><code id="linkSubJson"></code><button class="icon-btn btn-sm" data-copy="linkSubJson"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
       </div>
 
+      <!-- IP های فعال -->
+      <div id="activeIpsBlock" style="display:none;">
+        <label class="small muted mb-8" style="display:block;" data-i18n="inb_active_ips">IP های متصل در این لحظه</label>
+        <div class="small" id="activeIpsList" style="direction:ltr;"></div>
+      </div>
+
       <!-- توضیحات نهایی -->
       <div class="small muted" style="border-top:1px solid var(--border-soft); padding-top:14px;">
-        <span data-i18n="inb_info_configs_note">
-          لینک اشتراک به‌صورت متن ساده (Plain Text) ارائه می‌شود و شامل موارد زیر است:
-          <br>📊 یک کانفیگ نمایشی برای نمایش وضعیت مصرف و اعتبار
-          <br>❤️ یک کانفیگ نمایشی با پیام «StanNG is Free ❤️»
-          <br>🔗 یک کانفیگ TLS واقعی برای اتصال
-        </span>
+        <span data-i18n="inb_info_configs_note">لینک اشتراک یک کانفیگ TLS واقعی برمی‌گرداند. کلاینت‌هایی مثل v2rayNG، Nekobox و Clash حجم مصرفی و تاریخ انقضا را از هدر Subscription-Userinfo می‌خوانند و در همان صفحه اشتراک نشان می‌دهند.</span>
       </div>
     </div>
   </div>
@@ -425,9 +508,9 @@
 
 <!-- مودال Clean IP حذف شد -->
 
-<script src="/static/js/i18n.js"></script>
-<script src="/static/js/common.js"></script>
-<script src="/static/js/chart-mini.js"></script>
-<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/i18n.js?v={{ app_version }}"></script>
+<script src="/static/js/common.js?v={{ app_version }}"></script>
+<script src="/static/js/chart-mini.js?v={{ app_version }}"></script>
+<script src="/static/js/dashboard.js?v={{ app_version }}"></script>
 </body>
 </html>
