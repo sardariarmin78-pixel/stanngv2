@@ -9,6 +9,7 @@
 (() => {
   let inbounds = [];
   let plans = [];
+  let endpoints = [];
   let lastHourly = [];
   let filterText = '';
   let filterStatus = '';
@@ -59,7 +60,7 @@
   const viewTitle = $('viewTitle');
   const titleKeys = {
     dashboard: 'nav_dashboard', inbounds: 'nav_inbounds', plans: 'nav_plans',
-    traffic: 'nav_traffic', security: 'nav_security',
+    endpoints: 'nav_endpoints', traffic: 'nav_traffic', security: 'nav_security',
     notifications: 'nav_notifications', settings: 'nav_settings',
   };
 
@@ -70,6 +71,7 @@
     viewTitle.textContent = STANNG.t(titleKeys[name]);
     if (name === 'inbounds' || name === 'traffic') loadInbounds();
     if (name === 'plans') loadPlans();
+    if (name === 'endpoints') loadEndpoints();
     if (name === 'security') { loadTwofaStatus(); loadLoginLog(); }
     closeSidebarMobile();
     STANNG.playSfx('open', 0.25);
@@ -613,6 +615,150 @@
     } finally { STANNG.setLoading(btn, false); }
   });
 
+
+  // ---------------- endpoints ----------------
+  async function loadEndpoints() {
+    try {
+      const r = await STANNG.api('/api/endpoints');
+      endpoints = r.endpoints || [];
+      renderEndpoints();
+      $('navEndpointCount').textContent = endpoints.filter(e => e.enabled !== false).length;
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function healthCell(ep) {
+    const h = ep.health || {};
+    if (h.ok === null || h.ok === undefined) {
+      return `<span class="pill pill-muted">${esc(STANNG.t('ep_untested'))}</span>`;
+    }
+    if (!h.ok) return `<span class="pill pill-off"><span class="pill-dot"></span>${esc(STANNG.t('ep_down'))}</span>`;
+    const ms = h.latency_ms;
+    const cls = ms == null ? 'pill-on' : (ms < 300 ? 'pill-on' : ms < 900 ? 'pill-warn' : 'pill-off');
+    return `<span class="pill ${cls}"><span class="pill-dot"></span>${esc(ms != null ? ms + ' ms' : STANNG.t('ep_up'))}</span>`;
+  }
+
+  function renderEndpoints() {
+    const tbody = $('endpointsTableBody');
+    if (!tbody) return;
+    $('endpointsEmpty').style.display = endpoints.length ? 'none' : 'block';
+    tbody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    [...endpoints]
+      .sort((a, b) => (a.sort || 0) - (b.sort || 0) || (a.name || '').localeCompare(b.name || ''))
+      .forEach(ep => {
+        const tr = document.createElement('tr');
+        const on = ep.enabled !== false;
+        tr.innerHTML = `
+          <td data-label="${esc(STANNG.t('ep_name'))}"><b>${esc(ep.name || ep.address)}</b></td>
+          <td data-label="${esc(STANNG.t('ep_address'))}" class="mono small">${esc(ep.address)}:${esc(ep.port || 443)}</td>
+          <td data-label="${esc(STANNG.t('ep_host'))}" class="mono small">${esc(ep.host || '—')}${ep.sni ? ' / ' + esc(ep.sni) : ''}</td>
+          <td data-label="${esc(STANNG.t('ep_health'))}">${healthCell(ep)}</td>
+          <td data-label="${esc(STANNG.t('inb_status'))}"><span class="pill ${on ? 'pill-on' : 'pill-muted'}"><span class="pill-dot"></span>${esc(STANNG.t(on ? 'active' : 'inactive'))}</span></td>
+          <td data-label="${esc(STANNG.t('inb_actions'))}">
+            <div class="row-actions">
+              <button class="icon-btn btn-sm" data-ep-action="test" data-id="${esc(ep.id)}" title="${esc(STANNG.t('ep_test'))}"><svg><use href="#icon-refresh"/></svg></button>
+              <button class="icon-btn btn-sm" data-ep-action="edit" data-id="${esc(ep.id)}" title="${esc(STANNG.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
+              <button class="icon-btn btn-sm" data-ep-action="delete" data-id="${esc(ep.id)}" title="${esc(STANNG.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
+            </div>
+          </td>`;
+        frag.appendChild(tr);
+      });
+    tbody.appendChild(frag);
+  }
+
+  function openEndpointModal(ep = null) {
+    $('endpointModalTitle').textContent = ep ? STANNG.t('edit') : STANNG.t('ep_add');
+    $('epId').value = ep ? ep.id : '';
+    $('epName').value = ep ? (ep.name || '') : '';
+    $('epAddress').value = ep ? ep.address : '';
+    $('epPort').value = ep ? (ep.port || 443) : 443;
+    $('epHost').value = ep ? (ep.host || '') : '';
+    $('epSni').value = ep ? (ep.sni || '') : '';
+    $('epFp').value = ep ? (ep.fp || '') : '';
+    $('epSort').value = ep ? (ep.sort || 0) : endpoints.length;
+    $('epEnabled').checked = ep ? ep.enabled !== false : true;
+    openModal('endpointModal');
+  }
+  $('addEndpointBtn').addEventListener('click', () => openEndpointModal());
+
+  $('epSaveBtn').addEventListener('click', async () => {
+    const id = $('epId').value;
+    const body = {
+      name: $('epName').value.trim(),
+      address: $('epAddress').value.trim(),
+      port: parseInt($('epPort').value, 10) || 443,
+      host: $('epHost').value.trim(),
+      sni: $('epSni').value.trim(),
+      fp: $('epFp').value,
+      sort: parseInt($('epSort').value, 10) || 0,
+      enabled: $('epEnabled').checked,
+    };
+    if (!body.address) { STANNG.toast(STANNG.t('ep_address_required'), 'error'); return; }
+    const btn = $('epSaveBtn');
+    STANNG.setLoading(btn, true);
+    try {
+      if (id) await STANNG.api(`/api/endpoints/${id}`, { method: 'PATCH', body });
+      else await STANNG.api('/api/endpoints', { method: 'POST', body });
+      STANNG.toast(STANNG.t('settings_saved'), 'success');
+      closeModal('endpointModal');
+      loadEndpoints();
+    } catch (e) {
+      const map = { 'invalid-address': 'ep_bad_address', 'endpoint-limit-reached': 'ep_limit' };
+      STANNG.toast(map[e.detail] ? STANNG.t(map[e.detail]) : (e.detail || 'error'), 'error');
+    } finally { STANNG.setLoading(btn, false); }
+  });
+
+  async function testEndpoint(id, silent) {
+    try {
+      const r = await STANNG.api(`/api/endpoints/${id}/test`, { method: 'POST' });
+      const ep = endpoints.find(e => e.id === id);
+      if (ep) ep.health = r.health;
+      renderEndpoints();
+      if (!silent) {
+        STANNG.toast(
+          r.ok ? `${STANNG.t('ep_up')} — ${r.latency_ms} ms` : `${STANNG.t('ep_down')} — ${r.detail}`,
+          r.ok ? 'success' : 'error');
+      }
+      return r.ok;
+    } catch (e) {
+      if (!silent) STANNG.toast(e.detail || 'error', 'error');
+      return false;
+    }
+  }
+
+  $('endpointsTableBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-ep-action]');
+    if (!btn) return;
+    const ep = endpoints.find(x => x.id === btn.dataset.id);
+    if (!ep) return;
+    const action = btn.dataset.epAction;
+    if (action === 'edit') return openEndpointModal(ep);
+    if (action === 'test') {
+      STANNG.setLoading(btn, true);
+      await testEndpoint(ep.id, false);
+      STANNG.setLoading(btn, false);
+      return;
+    }
+    if (!confirm(STANNG.t('ep_delete_confirm'))) return;
+    try {
+      await STANNG.api(`/api/endpoints/${ep.id}`, { method: 'DELETE' });
+      STANNG.toast(STANNG.t('ep_deleted'), 'success');
+      loadEndpoints();
+    } catch (err) { STANNG.toast(err.detail || 'error', 'error'); }
+  });
+
+  $('testAllEndpointsBtn').addEventListener('click', async () => {
+    const btn = $('testAllEndpointsBtn');
+    STANNG.setLoading(btn, true);
+    // Sequential on purpose: a burst of parallel probes from one box skews
+    // the latency numbers it is trying to measure.
+    let up = 0;
+    for (const ep of endpoints) if (await testEndpoint(ep.id, true)) up++;
+    STANNG.setLoading(btn, false);
+    STANNG.toast(STANNG.t('ep_test_result').replace('{up}', up).replace('{total}', endpoints.length),
+                 up === endpoints.length ? 'success' : 'info');
+  });
+
   // ---------------- traffic table ----------------
   function renderTrafficTable() {
     const tbody = $('trafficTableBody');
@@ -693,7 +839,17 @@
   async function showLinks(uid) {
     try {
       const r = await STANNG.api(`/api/inbounds/${uid}/links`);
+      const configs = (r.links && r.links.configs) || [];
       $('linkTls').textContent = r.links.tls || '';
+      const multi = $('multiConfigBlock');
+      if (configs.length > 1) {
+        multi.style.display = '';
+        $('multiConfigList').innerHTML = configs.map(c =>
+          `<div class="link-row" style="margin-bottom:6px;"><code>${esc(c.link)}</code></div>`).join('');
+        $('multiConfigCount').textContent = configs.length;
+      } else {
+        multi.style.display = 'none';
+      }
       $('linkSub').textContent = r.sub_url || '';
       $('linkStatus').textContent = r.status_url || '';
       $('linkSubJson').textContent = r.sub_json_url || '';
@@ -1057,4 +1213,5 @@
   // ---------------- boot ----------------
   loadInbounds();
   loadPlans();
+  loadEndpoints();
 })();

@@ -32,6 +32,7 @@
       <div class="nav-item active" data-view="dashboard"><svg><use href="#icon-dashboard"/></svg><span data-i18n="nav_dashboard">داشبورد</span></div>
       <div class="nav-item" data-view="inbounds"><svg><use href="#icon-users"/></svg><span data-i18n="nav_inbounds">کاربران</span><span class="badge" id="navInboundCount">0</span></div>
       <div class="nav-item" data-view="plans"><svg><use href="#icon-layers"/></svg><span data-i18n="nav_plans">پلن‌ها</span></div>
+      <div class="nav-item" data-view="endpoints"><svg><use href="#icon-globe"/></svg><span data-i18n="nav_endpoints">لوکیشن‌ها</span><span class="badge" id="navEndpointCount">0</span></div>
       <div class="nav-item" data-view="traffic"><svg><use href="#icon-traffic"/></svg><span data-i18n="nav_traffic">ترافیک</span></div>
       <div class="nav-label" data-i18n="nav_group_system">سیستم</div>
       <div class="nav-item" data-view="security"><svg><use href="#icon-shield"/></svg><span data-i18n="nav_security">امنیت</span></div>
@@ -219,6 +220,43 @@
               <svg><use href="#icon-layers"/></svg>
               <div class="title" data-i18n="plans_empty">هنوز پلنی تعریف نشده</div>
               <div class="small" data-i18n="plans_empty_hint">مثلاً «۳۰ روز / ۵۰ گیگ / ۲ دستگاه»</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- ============ ENDPOINTS ============ -->
+      <section class="view" id="view-endpoints">
+        <div class="win">
+          <div class="win-head">
+            <h3><svg><use href="#icon-globe"/></svg><span data-i18n="ep_title">نقاط ورود</span></h3>
+            <div class="win-head-tools">
+              <button class="btn btn-sm" id="testAllEndpointsBtn"><svg><use href="#icon-refresh"/></svg><span data-i18n="ep_test_all">تست همه</span></button>
+              <button class="btn btn-primary btn-sm" id="addEndpointBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="ep_add">لوکیشن جدید</span></button>
+            </div>
+          </div>
+          <div class="win-body no-pad">
+            <div class="small muted" style="padding:12px 16px; border-bottom:1px solid var(--border);" data-i18n="ep_hint">هر نقطه ورود یک مسیر جداگانه به همین سرور است: دامنه دوم، Clean IP کلادفلر، یا پورت متفاوت. لینک اشتراک کاربر شامل همه آن‌ها می‌شود، پس اگر یکی فیلتر شد بقیه کار می‌کنند. اگر هیچ لوکیشنی تعریف نکنید، رفتار قبلی (یک کانفیگ) حفظ می‌شود.</div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="ep_name">نام</th>
+                    <th data-i18n="ep_address">آدرس</th>
+                    <th data-i18n="ep_host">Host / SNI</th>
+                    <th data-i18n="ep_health">سلامت</th>
+                    <th data-i18n="inb_status">وضعیت</th>
+                    <th style="text-align:end;" data-i18n="inb_actions">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody id="endpointsTableBody"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="endpointsEmpty" style="display:none;">
+              <svg><use href="#icon-globe"/></svg>
+              <div class="title" data-i18n="ep_empty">هنوز لوکیشنی اضافه نشده</div>
+              <div class="small" data-i18n="ep_empty_hint">بدون لوکیشن، اشتراک فقط یک کانفیگ از دامنه اصلی می‌دهد</div>
             </div>
           </div>
         </div>
@@ -653,6 +691,68 @@
   </div>
 </div>
 
+
+<!-- ============ MODAL: endpoint ============ -->
+<div class="modal-overlay" id="endpointModal">
+  <div class="modal" style="max-width:500px;">
+    <div class="modal-head">
+      <h3 id="endpointModalTitle" data-i18n="ep_add">لوکیشن جدید</h3>
+      <button class="icon-btn" data-close-modal="endpointModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="epId">
+      <div class="field">
+        <label data-i18n="ep_name">نام نمایشی</label>
+        <input class="input" type="text" id="epName" maxlength="40" placeholder="Germany · Cloudflare">
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label data-i18n="ep_address">آدرس (دامنه یا IP)</label>
+          <input class="input mono" type="text" id="epAddress" placeholder="de.example.com" style="direction:ltr;">
+        </div>
+        <div class="field">
+          <label data-i18n="ep_port">پورت</label>
+          <input class="input mono" type="number" id="epPort" min="1" max="65535" value="443" style="direction:ltr;">
+        </div>
+        <div class="field span-2">
+          <label data-i18n="ep_host">Host (اگر آدرس یک IP است لازم است)</label>
+          <input class="input mono" type="text" id="epHost" placeholder="panel.example.com" style="direction:ltr;">
+          <div class="small muted mt-8" data-i18n="ep_host_hint">وقتی کاربر به یک IP خام وصل می‌شود، پروکسی برای مسیریابی به هدر Host نیاز دارد. خالی = دامنه اصلی پنل.</div>
+        </div>
+        <div class="field span-2">
+          <label data-i18n="ep_sni">SNI (اختیاری)</label>
+          <input class="input mono" type="text" id="epSni" placeholder="" style="direction:ltr;">
+        </div>
+        <div class="field">
+          <label data-i18n="inb_fingerprint">اثر انگشت</label>
+          <select class="input" id="epFp">
+            <option value="" data-i18n="ep_inherit">— پیش‌فرض —</option>
+            <option value="chrome">chrome</option>
+            <option value="firefox">firefox</option>
+            <option value="safari">safari</option>
+            <option value="ios">ios</option>
+            <option value="edge">edge</option>
+            <option value="android">android</option>
+            <option value="random">random</option>
+          </select>
+        </div>
+        <div class="field">
+          <label data-i18n="ep_sort">ترتیب</label>
+          <input class="input mono" type="number" id="epSort" min="0" max="999" value="0" style="direction:ltr;">
+        </div>
+      </div>
+      <div class="setting-row" style="margin-bottom:0;">
+        <div class="title small" data-i18n="inb_enabled">فعال</div>
+        <label class="switch"><input type="checkbox" id="epEnabled" checked><span class="track"><span class="thumb"></span></span></label>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="endpointModal"><span data-i18n="cancel">انصراف</span></button>
+      <button class="btn btn-primary" id="epSaveBtn"><span data-i18n="save">ذخیره</span></button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ MODAL: plan ============ -->
 <div class="modal-overlay" id="planModal">
   <div class="modal" style="max-width:460px;">
@@ -748,6 +848,12 @@
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_sub_link_json">لینک اشتراک JSON</label>
         <div class="link-row"><code id="linkSubJson"></code><button class="icon-btn btn-sm" data-copy="linkSubJson" title="copy"><svg><use href="#icon-copy"/></svg></button></div>
+      </div>
+      <div id="multiConfigBlock" style="display:none;">
+        <label class="small muted mb-8" style="display:block;">
+          <span data-i18n="ep_all_routes">همه مسیرها</span> (<span id="multiConfigCount" class="mono">0</span>)
+        </label>
+        <div id="multiConfigList"></div>
       </div>
       <div id="activeIpsBlock" style="display:none;">
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_active_ips">IP های متصل در این لحظه</label>

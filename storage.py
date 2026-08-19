@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 DATA_DIR = os.environ.get("STANNG_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 DB_PATH = os.path.join(DATA_DIR, "db.json")
 
-SCHEMA_VERSION = 5  # v5: plans, per-user history, 2FA, notifications
+SCHEMA_VERSION = 6  # v6: multi-endpoint subscriptions
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -87,6 +87,11 @@ DEFAULT_DB: Dict[str, Any] = {
     },
     "inbounds": [],       # list of inbound/user dicts
     "plans": [],          # reusable presets: {id, name, days, quota_gb, max_connections, max_requests}
+    # Entry points a client can reach this backend through. Several hostnames
+    # or clean CDN IPs in front of one deployment already behave as separate
+    # routes, which is what matters against per-IP blocking. `node_url` is
+    # reserved for real remote nodes later; empty means "this deployment".
+    "endpoints": [],      # {id, name, address, port, sni, host, fp, alpn, enabled, sort, node_url, health}
     "login_log": [],      # bounded audit trail: {ts, ip, ok, method, reason}
     "alerts_sent": {},    # "<uid>:<kind>" -> ts, for notification cooldowns
     "stats": {
@@ -208,6 +213,21 @@ def normalize_db(db: Dict[str, Any]) -> bool:
     if not isinstance(db.get("plans"), list):
         db["plans"] = []
         changed = True
+    if not isinstance(db.get("endpoints"), list):
+        db["endpoints"] = []
+        changed = True
+    else:
+        kept_eps = []
+        for ep in db["endpoints"]:
+            if not isinstance(ep, dict) or not ep.get("id") or not ep.get("address"):
+                changed = True
+                continue
+            if not isinstance(ep.get("health"), dict):
+                ep["health"] = {"ok": None, "ts": None, "latency_ms": None}
+                changed = True
+            kept_eps.append(ep)
+        if len(kept_eps) != len(db["endpoints"]):
+            db["endpoints"] = kept_eps
     if not isinstance(db.get("alerts_sent"), dict):
         db["alerts_sent"] = {}
         changed = True
