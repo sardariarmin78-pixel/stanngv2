@@ -2,36 +2,40 @@
 <html lang="fa" dir="rtl" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
 <title>{{ panel_name }} · Dashboard</title>
-<link rel="icon" href="/static/img/favicon-32.png">
-<link rel="apple-touch-icon" href="/static/img/favicon-180.png">
+<link rel="icon" href="/static/img/favicon.svg?v={{ app_version }}" type="image/svg+xml">
 <link rel="stylesheet" href="/static/css/fonts.css?v={{ app_version }}">
 <link rel="stylesheet" href="/static/css/theme.css?v={{ app_version }}">
 <link rel="stylesheet" href="/static/css/dashboard.css?v={{ app_version }}">
 </head>
 <body>
 {% include "_icons.html" %}
-<div class="sparkle-field"></div>
-<a class="telegram-fab" href="{{ telegram_contact }}" target="_blank" rel="noopener" title="پشتیبانی تلگرام / Telegram Support">
+<a class="telegram-fab" href="{{ telegram_contact }}" target="_blank" rel="noopener" title="پشتیبانی / Support">
   <svg><use href="#icon-telegram"/></svg>
 </a>
 
 <div class="app-shell">
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
-      <img src="/static/img/logo-square.png" alt="logo">
-      <div>
+      <svg class="brand-mark"><use href="#brand-mark"/></svg>
+      <div style="min-width:0;">
         <div class="name">{{ panel_name }}</div>
         <div class="sub">v<span id="appVersion">-</span></div>
       </div>
     </div>
     <nav class="nav-group">
+      <div class="nav-label" data-i18n="nav_group_manage">مدیریت</div>
       <div class="nav-item active" data-view="dashboard"><svg><use href="#icon-dashboard"/></svg><span data-i18n="nav_dashboard">داشبورد</span></div>
       <div class="nav-item" data-view="inbounds"><svg><use href="#icon-users"/></svg><span data-i18n="nav_inbounds">کاربران</span><span class="badge" id="navInboundCount">0</span></div>
+      <div class="nav-item" data-view="plans"><svg><use href="#icon-layers"/></svg><span data-i18n="nav_plans">پلن‌ها</span></div>
       <div class="nav-item" data-view="traffic"><svg><use href="#icon-traffic"/></svg><span data-i18n="nav_traffic">ترافیک</span></div>
+      <div class="nav-label" data-i18n="nav_group_system">سیستم</div>
       <div class="nav-item" data-view="security"><svg><use href="#icon-shield"/></svg><span data-i18n="nav_security">امنیت</span></div>
+      <div class="nav-item" data-view="notifications"><svg><use href="#icon-bell"/></svg><span data-i18n="nav_notifications">اعلان‌ها</span></div>
       <div class="nav-item" data-view="settings"><svg><use href="#icon-settings"/></svg><span data-i18n="nav_settings">تنظیمات</span></div>
     </nav>
     <div class="sidebar-footer">
@@ -39,10 +43,10 @@
     </div>
   </aside>
 
-  <div style="flex:1; min-width:0; display:flex; flex-direction:column;">
+  <div class="shell-main">
     <header class="topbar">
-      <div class="flex items-center gap-12">
-        <button class="icon-btn menu-toggle" id="menuToggle"><svg><use href="#icon-menu"/></svg></button>
+      <div class="flex items-center gap-12" style="min-width:0;">
+        <button class="icon-btn menu-toggle" id="menuToggle" aria-label="menu"><svg><use href="#icon-menu"/></svg></button>
         <h1 id="viewTitle" data-i18n="nav_dashboard">داشبورد</h1>
       </div>
       <div class="topbar-actions">
@@ -57,18 +61,18 @@
 
     <main class="main-content">
 
-      <!-- ============ DASHBOARD VIEW ============ -->
+      <!-- ============ DASHBOARD ============ -->
       <section class="view active" id="view-dashboard">
         <div class="grid mb-16">
           <div class="col-3 win stat-card">
             <div class="label"><svg><use href="#icon-cpu"/></svg><span data-i18n="dash_cpu">پردازنده</span></div>
             <div class="value" id="statCpu">--%</div>
-            <div class="bar progress-amethyst"><span id="barCpu" style="width:0%"></span></div>
+            <div class="bar"><span id="barCpu" style="width:0%"></span></div>
           </div>
           <div class="col-3 win stat-card">
             <div class="label"><svg><use href="#icon-memory"/></svg><span data-i18n="dash_ram">حافظه</span></div>
             <div class="value" id="statMem">--%</div>
-            <div class="bar progress-azure"><span id="barMem" style="width:0%"></span></div>
+            <div class="bar"><span id="barMem" style="width:0%"></span></div>
           </div>
           <div class="col-3 win stat-card">
             <div class="label"><svg><use href="#icon-clock"/></svg><span data-i18n="dash_uptime">زمان فعالیت</span></div>
@@ -81,82 +85,146 @@
         </div>
 
         <div class="grid mb-16">
-          <div class="col-4 win stat-card">
+          <div class="col-3 win stat-card">
             <div class="label"><svg><use href="#icon-traffic"/></svg><span data-i18n="dash_total_traffic">کل ترافیک</span></div>
             <div class="value" id="statTotalTraffic">0 B</div>
             <div class="small muted flex gap-12 mt-8">
-              <span><svg width="12" height="12" style="vertical-align:-1px"><use href="#icon-upload"/></svg> <span id="statUp">0 B</span></span>
-              <span><svg width="12" height="12" style="vertical-align:-1px"><use href="#icon-download"/></svg> <span id="statDown">0 B</span></span>
+              <span><svg width="11" height="11" style="vertical-align:-1px"><use href="#icon-upload"/></svg> <span id="statUp">0 B</span></span>
+              <span><svg width="11" height="11" style="vertical-align:-1px"><use href="#icon-download"/></svg> <span id="statDown">0 B</span></span>
             </div>
           </div>
-          <div class="col-4 win stat-card">
+          <div class="col-3 win stat-card">
             <div class="label"><svg><use href="#icon-bolt"/></svg><span data-i18n="dash_active_conn">اتصالات فعال</span></div>
             <div class="value" id="statActiveConn">0</div>
           </div>
-          <div class="col-4 win stat-card">
+          <div class="col-3 win stat-card">
             <div class="label"><svg><use href="#icon-users"/></svg><span data-i18n="dash_total_inbounds">تعداد کاربران</span></div>
             <div class="value" id="statInboundCount">0</div>
+          </div>
+          <div class="col-3 win stat-card">
+            <div class="label"><svg><use href="#icon-clock"/></svg><span data-i18n="dash_expiring">رو به انقضا</span></div>
+            <div class="value" id="statExpiring">0</div>
+            <div class="small muted mt-8" data-i18n="dash_expiring_hint">در ۷ روز آینده</div>
           </div>
         </div>
 
         <div class="grid">
           <div class="col-8 win">
-            <div class="win-head"><h3><svg><use href="#icon-traffic"/></svg><span data-i18n="dash_hourly_chart">نمودار ترافیک ساعتی</span></h3></div>
-            <div class="win-body"><canvas id="trafficChart" height="240"></canvas></div>
+            <div class="win-head">
+              <h3><svg><use href="#icon-chart"/></svg><span data-i18n="dash_hourly_chart">نمودار ترافیک ساعتی</span></h3>
+            </div>
+            <div class="win-body">
+              <div class="chart-wrap"><canvas id="trafficChart" height="230"></canvas></div>
+            </div>
           </div>
           <div class="col-4 win">
             <div class="win-head"><h3><svg><use href="#icon-refresh"/></svg><span data-i18n="dash_ota_title">به‌روزرسانی پنل</span></h3></div>
             <div class="win-body flex-col gap-12">
-              <div class="small muted">Current: <b id="otaCurrent">-</b></div>
+              <div class="small muted">Current: <b class="mono" id="otaCurrent">-</b></div>
               <div id="otaResult" class="small"></div>
-              <button class="btn btn-azure btn-sm" id="otaCheckBtn"><span data-i18n="dash_ota_check">بررسی نسخه جدید</span></button>
-              <button class="btn btn-primary btn-sm" id="otaUpdateBtn" style="display:none;"><svg width="16" height="16"><use href="#icon-download"/></svg><span data-i18n="dash_ota_update_btn">به‌روزرسانی همین الان</span></button>
-              <div class="small muted" id="otaUpdateHint" style="display:none;" data-i18n="dash_ota_update_hint">داده‌ی کاربران (data/db.json) هرگز در این فرآیند دست‌نخورده باقی می‌ماند.</div>
-              <hr style="border-color:var(--border-soft); width:100%; margin:6px 0;">
-              <button class="btn btn-emerald btn-sm w-full" id="quickAddBtn"><svg width="16" height="16"><use href="#icon-plus"/></svg><span data-i18n="dash_quick_add">افزودن کاربر جدید</span></button>
+              <button class="btn btn-sm w-full" id="otaCheckBtn"><span data-i18n="dash_ota_check">بررسی نسخه جدید</span></button>
+              <button class="btn btn-primary btn-sm w-full" id="otaUpdateBtn" style="display:none;"><svg><use href="#icon-download"/></svg><span data-i18n="dash_ota_update_btn">به‌روزرسانی همین الان</span></button>
+              <div class="small muted" id="otaUpdateHint" style="display:none;" data-i18n="dash_ota_update_hint">داده‌ی کاربران هرگز در این فرآیند دست‌نخورده باقی می‌ماند.</div>
+              <hr>
+              <button class="btn btn-primary btn-sm w-full" id="quickAddBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="dash_quick_add">افزودن کاربر جدید</span></button>
+              <button class="btn btn-sm w-full" id="quickBulkBtn"><svg><use href="#icon-layers"/></svg><span data-i18n="inb_bulk_create">ساخت گروهی</span></button>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- ============ INBOUNDS VIEW ============ -->
+      <!-- ============ USERS ============ -->
       <section class="view" id="view-inbounds">
         <div class="win">
           <div class="win-head">
             <h3><svg><use href="#icon-users"/></svg><span data-i18n="inb_title">مدیریت کاربران</span></h3>
-            <div class="flex gap-8 items-center win-head-tools">
-              <div class="input-wrap search-box">
-                <svg class="input-icon" width="16" height="16"><use href="#icon-search"/></svg>
-                <input class="input" style="padding:8px 10px 8px 36px; font-size:13px;" id="inboundSearch" data-i18n-placeholder="search_placeholder" placeholder="جستجوی کاربر...">
+            <div class="win-head-tools">
+              <div class="search-box">
+                <svg><use href="#icon-search"/></svg>
+                <input class="input" id="inboundSearch" data-i18n-placeholder="search_placeholder" placeholder="جستجوی کاربر...">
               </div>
-              <button class="btn btn-emerald btn-sm" id="addInboundBtn"><svg width="16" height="16"><use href="#icon-plus"/></svg><span data-i18n="inb_add">کاربر جدید</span></button>
+              <select class="input btn-sm" id="inboundFilterStatus" style="height:32px; width:auto; font-size:12.5px;">
+                <option value="" data-i18n="filter_all">همه</option>
+                <option value="active" data-i18n="active">فعال</option>
+                <option value="inactive" data-i18n="inactive">غیرفعال</option>
+                <option value="expiring" data-i18n="filter_expiring">رو به انقضا</option>
+              </select>
+              <button class="btn btn-sm" id="bulkCreateBtn"><svg><use href="#icon-layers"/></svg><span data-i18n="inb_bulk_create">ساخت گروهی</span></button>
+              <button class="btn btn-primary btn-sm" id="addInboundBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="inb_add">کاربر جدید</span></button>
             </div>
           </div>
+
+          <div class="bulk-bar" id="bulkBar">
+            <span class="count"><span id="bulkCount">0</span> <span data-i18n="bulk_selected">انتخاب شده</span></span>
+            <div class="spacer"></div>
+            <button class="btn btn-sm" data-bulk="renew"><svg><use href="#icon-clock"/></svg><span data-i18n="inb_renew">تمدید</span></button>
+            <button class="btn btn-sm" data-bulk="enable"><svg><use href="#icon-power"/></svg><span data-i18n="bulk_enable">فعال</span></button>
+            <button class="btn btn-sm" data-bulk="disable"><span data-i18n="bulk_disable">غیرفعال</span></button>
+            <button class="btn btn-sm" data-bulk="reset-usage"><svg><use href="#icon-refresh"/></svg><span data-i18n="inb_reset_usage">ریست مصرف</span></button>
+            <button class="btn btn-sm btn-danger" data-bulk="delete"><svg><use href="#icon-trash"/></svg><span data-i18n="delete">حذف</span></button>
+          </div>
+
           <div class="win-body no-pad">
             <div class="table-wrap">
-              <table class="data-table">
+              <table>
                 <thead>
                   <tr>
+                    <th class="col-check"><input type="checkbox" class="checkbox" id="selectAll" aria-label="select all"></th>
                     <th data-i18n="inb_name">نام</th>
                     <th data-i18n="inb_status">وضعیت</th>
                     <th data-i18n="inb_usage">مصرف</th>
                     <th data-i18n="inb_expire">اعتبار</th>
                     <th data-i18n="inb_max_conn">اتصال</th>
-                    <th data-i18n="inb_actions">عملیات</th>
+                    <th style="text-align:end;" data-i18n="inb_actions">عملیات</th>
                   </tr>
                 </thead>
                 <tbody id="inboundsTableBody"></tbody>
               </table>
             </div>
             <div class="empty-state" id="inboundsEmpty" style="display:none;">
-              <svg><use href="#icon-owl"/></svg>
-              <div data-i18n="inb_empty">هنوز کاربری اضافه نشده است</div>
+              <svg><use href="#icon-inbox"/></svg>
+              <div class="title" data-i18n="inb_empty">هنوز کاربری اضافه نشده است</div>
+              <div class="small" data-i18n="inb_empty_hint">با دکمه «کاربر جدید» شروع کنید</div>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- ============ TRAFFIC VIEW ============ -->
+      <!-- ============ PLANS ============ -->
+      <section class="view" id="view-plans">
+        <div class="win">
+          <div class="win-head">
+            <h3><svg><use href="#icon-layers"/></svg><span data-i18n="plans_title">پلن‌های آماده</span></h3>
+            <div class="win-head-tools">
+              <button class="btn btn-primary btn-sm" id="addPlanBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="plans_add">پلن جدید</span></button>
+            </div>
+          </div>
+          <div class="win-body no-pad">
+            <div class="small muted" style="padding:12px 16px; border-bottom:1px solid var(--border);" data-i18n="plans_hint">پلن‌ها فقط قالب هستند: با ساخت گروهی، ده‌ها کاربر با همین مشخصات در یک مرحله ساخته می‌شود. تغییر پلن روی کاربران قبلی اثری ندارد.</div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="plans_name">نام پلن</th>
+                    <th data-i18n="inb_quota">حجم</th>
+                    <th data-i18n="inb_expire">مدت</th>
+                    <th data-i18n="inb_max_conn">اتصال همزمان</th>
+                    <th style="text-align:end;" data-i18n="inb_actions">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody id="plansTableBody"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="plansEmpty" style="display:none;">
+              <svg><use href="#icon-layers"/></svg>
+              <div class="title" data-i18n="plans_empty">هنوز پلنی تعریف نشده</div>
+              <div class="small" data-i18n="plans_empty_hint">مثلاً «۳۰ روز / ۵۰ گیگ / ۲ دستگاه»</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ TRAFFIC ============ -->
       <section class="view" id="view-traffic">
         <div class="grid mb-16">
           <div class="col-6 win stat-card">
@@ -172,8 +240,14 @@
           <div class="win-head"><h3><svg><use href="#icon-traffic"/></svg><span data-i18n="traffic_per_user">ترافیک به تفکیک کاربر</span></h3></div>
           <div class="win-body no-pad">
             <div class="table-wrap">
-              <table class="data-table">
-                <thead><tr><th data-i18n="inb_name">نام</th><th data-i18n="dash_upload">آپلود</th><th data-i18n="dash_download">دانلود</th><th data-i18n="inb_usage">مجموع</th></tr></thead>
+              <table>
+                <thead><tr>
+                  <th data-i18n="inb_name">نام</th>
+                  <th data-i18n="dash_upload">آپلود</th>
+                  <th data-i18n="dash_download">دانلود</th>
+                  <th data-i18n="inb_usage">مجموع</th>
+                  <th style="text-align:end;" data-i18n="traffic_history">تاریخچه</th>
+                </tr></thead>
                 <tbody id="trafficTableBody"></tbody>
               </table>
             </div>
@@ -181,50 +255,149 @@
         </div>
       </section>
 
-      <!-- ============ VIEW CLEAN IP حذف شد ============ -->
-
-      <!-- ============ SECURITY VIEW ============ -->
+      <!-- ============ SECURITY ============ -->
       <section class="view" id="view-security">
-        <div class="win" style="max-width:520px;">
-          <div class="win-head"><h3><svg><use href="#icon-shield"/></svg><span data-i18n="sec_change_pass">تغییر نام کاربری / رمز عبور</span></h3></div>
-          <div class="win-body">
-            <form id="securityForm">
-              <div class="field">
-                <label data-i18n="sec_old_pass">رمز عبور فعلی</label>
-                <div class="input-wrap">
-                  <svg class="input-icon"><use href="#icon-key"/></svg>
-                  <input class="input" type="password" id="oldPassword" required autocomplete="current-password">
+        <div class="grid">
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-key"/></svg><span data-i18n="sec_change_pass">تغییر نام کاربری / رمز عبور</span></h3></div>
+            <div class="win-body">
+              <form id="securityForm">
+                <div class="field">
+                  <label data-i18n="sec_old_pass">رمز عبور فعلی</label>
+                  <div class="input-wrap">
+                    <svg class="input-icon"><use href="#icon-key"/></svg>
+                    <input class="input" type="password" id="oldPassword" required autocomplete="current-password">
+                  </div>
+                </div>
+                <div class="field">
+                  <label data-i18n="sec_new_user">نام کاربری جدید</label>
+                  <div class="input-wrap">
+                    <svg class="input-icon"><use href="#icon-user-circle"/></svg>
+                    <input class="input" type="text" id="newUsername" autocomplete="username">
+                  </div>
+                  <div class="small muted mt-8" data-i18n="sec_leave_blank">اگر نمی‌خواهید تغییر کند خالی بگذارید</div>
+                </div>
+                <div class="field">
+                  <label data-i18n="sec_new_pass">رمز عبور جدید</label>
+                  <div class="input-wrap">
+                    <svg class="input-icon"><use href="#icon-key"/></svg>
+                    <input class="input" type="password" id="newPassword" autocomplete="new-password">
+                  </div>
+                </div>
+                <div class="field">
+                  <label data-i18n="sec_new_pass_confirm">تکرار رمز عبور جدید</label>
+                  <div class="input-wrap">
+                    <svg class="input-icon"><use href="#icon-key"/></svg>
+                    <input class="input" type="password" id="newPassword2" autocomplete="new-password">
+                  </div>
+                </div>
+                <button type="submit" class="btn btn-primary" id="securityBtn"><span data-i18n="save">ذخیره</span></button>
+              </form>
+            </div>
+          </div>
+
+          <div class="col-6 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-lock"/></svg><span data-i18n="twofa_title">ورود دومرحله‌ای</span></h3>
+              <span class="pill pill-muted" id="twofaBadge" data-i18n="twofa_off">غیرفعال</span>
+            </div>
+            <div class="win-body flex-col gap-12">
+              <div class="small muted" data-i18n="twofa_hint">پس از فعال‌سازی، علاوه بر رمز عبور یک کد ۶ رقمی از اپلیکیشن Google Authenticator یا مشابه لازم است.</div>
+              <div id="twofaOffBlock">
+                <button class="btn btn-primary btn-sm" id="twofaSetupBtn"><svg><use href="#icon-lock"/></svg><span data-i18n="twofa_enable">فعال‌سازی</span></button>
+              </div>
+              <div id="twofaOnBlock" style="display:none;">
+                <div class="small muted mb-12"><span data-i18n="twofa_recovery_left">کدهای بازیابی باقی‌مانده</span>: <b class="mono" id="twofaRecoveryLeft">0</b></div>
+                <div class="flex gap-8 flex-wrap">
+                  <button class="btn btn-sm" id="twofaRegenBtn"><span data-i18n="twofa_regen">کدهای بازیابی جدید</span></button>
+                  <button class="btn btn-sm btn-danger" id="twofaDisableBtn"><span data-i18n="twofa_disable">غیرفعال کردن</span></button>
                 </div>
               </div>
-              <div class="field">
-                <label data-i18n="sec_new_user">نام کاربری جدید</label>
-                <div class="input-wrap">
-                  <svg class="input-icon"><use href="#icon-user-circle"/></svg>
-                  <input class="input" type="text" id="newUsername" autocomplete="username">
-                </div>
-                <div class="small muted mt-8" data-i18n="sec_leave_blank">اگر نمی‌خواهید تغییر کند خالی بگذارید</div>
+              <hr>
+              <button class="btn btn-sm btn-danger w-full" id="logoutAllBtn"><span data-i18n="settings_logout_all">خروج از همه دستگاه‌ها</span></button>
+            </div>
+          </div>
+
+          <div class="col-12 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-clock"/></svg><span data-i18n="loginlog_title">تاریخچه ورود</span></h3>
+              <button class="icon-btn btn-sm" id="loginLogRefresh" title="refresh"><svg><use href="#icon-refresh"/></svg></button>
+            </div>
+            <div class="win-body no-pad">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th data-i18n="loginlog_time">زمان</th>
+                    <th data-i18n="loginlog_ip">IP</th>
+                    <th data-i18n="loginlog_method">روش</th>
+                    <th data-i18n="loginlog_result">نتیجه</th>
+                  </tr></thead>
+                  <tbody id="loginLogBody"></tbody>
+                </table>
               </div>
-              <div class="field">
-                <label data-i18n="sec_new_pass">رمز عبور جدید</label>
-                <div class="input-wrap">
-                  <svg class="input-icon"><use href="#icon-key"/></svg>
-                  <input class="input" type="password" id="newPassword" autocomplete="new-password">
-                </div>
+              <div class="empty-state" id="loginLogEmpty" style="display:none;">
+                <div class="small" data-i18n="loginlog_empty">هنوز ورودی ثبت نشده</div>
               </div>
-              <div class="field">
-                <label data-i18n="sec_new_pass_confirm">تکرار رمز عبور جدید</label>
-                <div class="input-wrap">
-                  <svg class="input-icon"><use href="#icon-key"/></svg>
-                  <input class="input" type="password" id="newPassword2" autocomplete="new-password">
-                </div>
-              </div>
-              <button type="submit" class="btn btn-primary" id="securityBtn"><span data-i18n="save">ذخیره</span></button>
-            </form>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- ============ SETTINGS VIEW ============ -->
+      <!-- ============ NOTIFICATIONS ============ -->
+      <section class="view" id="view-notifications">
+        <div class="grid">
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-telegram"/></svg><span data-i18n="notify_bot_title">ربات تلگرام</span></h3></div>
+            <div class="win-body">
+              <div class="small muted mb-16" data-i18n="notify_bot_hint">با @BotFather یک ربات بسازید و توکن آن را اینجا بگذارید. برای گرفتن آیدی عددی چت، به ربات @userinfobot پیام بدهید. اعلان‌ها فقط به خودِ شما ارسال می‌شود.</div>
+              <div class="field">
+                <label data-i18n="notify_token">توکن ربات</label>
+                <input class="input mono" type="password" id="settingBotToken" placeholder="123456789:AA..." style="direction:ltr;" autocomplete="off">
+              </div>
+              <div class="field">
+                <label data-i18n="notify_chat_id">آیدی عددی چت</label>
+                <input class="input mono" type="text" id="settingChatId" placeholder="123456789" style="direction:ltr;" autocomplete="off">
+              </div>
+              <div class="flex gap-8 flex-wrap">
+                <button class="btn btn-primary btn-sm" id="saveNotifyBtn"><span data-i18n="save">ذخیره</span></button>
+                <button class="btn btn-sm" id="testNotifyBtn"><svg><use href="#icon-bell"/></svg><span data-i18n="notify_test">ارسال پیام آزمایشی</span></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-bell"/></svg><span data-i18n="notify_rules_title">قوانین هشدار</span></h3></div>
+            <div class="win-body">
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="notify_quota">هشدار اتمام حجم</div>
+                  <div class="hint" data-i18n="notify_quota_hint">وقتی مصرف کاربر از درصد تعیین‌شده عبور کند</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingNotifyQuota" checked><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="field">
+                <label data-i18n="notify_quota_percent">آستانه هشدار (٪)</label>
+                <input class="input" type="number" id="settingNotifyPercent" min="1" max="100" step="5" placeholder="80" style="direction:ltr;">
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="notify_expiry">هشدار نزدیک شدن انقضا</div>
+                  <div class="hint" data-i18n="notify_expiry_hint">چند روز مانده به پایان اعتبار خبر بدهد</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingNotifyExpiry" checked><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="field">
+                <label data-i18n="notify_expiry_days">چند روز قبل</label>
+                <input class="input" type="number" id="settingNotifyDays" min="0" max="60" step="1" placeholder="3" style="direction:ltr;">
+              </div>
+              <div class="small muted" data-i18n="notify_cooldown">هر هشدار برای هر کاربر حداکثر یک‌بار در ۲۴ ساعت ارسال می‌شود.</div>
+              <button class="btn btn-primary btn-sm mt-12" id="saveNotifyRulesBtn"><span data-i18n="save">ذخیره</span></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
       <section class="view" id="view-settings">
         <div class="grid">
           <div class="col-6 win">
@@ -238,32 +411,50 @@
                 <label data-i18n="settings_ota_repo">مخزن گیت‌هاب برای آپدیت</label>
                 <input class="input" type="text" id="settingOtaRepo" placeholder="username/repo" style="direction:ltr;">
               </div>
-              <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:12px 14px;">
+              <div class="setting-row">
                 <div>
-                  <div style="font-weight:700; font-size:13.5px;" data-i18n="settings_keepalive">سیستم بیدارباش (Keep-Alive)</div>
-                  <div class="small muted mt-8" data-i18n="settings_keepalive_hint">هر ۱۰ دقیقه یک بار پینگ داخلی برای جلوگیری از خواب رفتن سرویس</div>
+                  <div class="title" data-i18n="settings_keepalive">سیستم بیدارباش</div>
+                  <div class="hint" data-i18n="settings_keepalive_hint">هر ۱۰ دقیقه یک پینگ برای جلوگیری از خواب رفتن سرویس</div>
                 </div>
                 <label class="switch"><input type="checkbox" id="settingKeepAlive" checked><span class="track"><span class="thumb"></span></span></label>
               </div>
-              <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:12px 14px;">
-                <div style="font-weight:700; font-size:13.5px;" data-i18n="settings_sound">جلوه‌های صوتی</div>
+              <div class="setting-row">
+                <div class="title" data-i18n="settings_sound">جلوه‌های صوتی</div>
                 <label class="switch"><input type="checkbox" id="settingSound" checked><span class="track"><span class="thumb"></span></span></label>
               </div>
-              <button class="btn btn-primary mt-12" id="saveSettingsBtn"><span data-i18n="save">ذخیره</span></button>
+              <button class="btn btn-primary btn-sm" id="saveSettingsBtn"><span data-i18n="save">ذخیره</span></button>
+            </div>
+          </div>
+
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-bolt"/></svg><span data-i18n="settings_brand_title">برندینگ</span></h3></div>
+            <div class="win-body">
+              <div class="small muted mb-16" data-i18n="settings_brand_hint">نام پنل و لینک پشتیبانی در تمام صفحات نمایش داده می‌شود. خالی بگذارید تا مقدار پیش‌فرض سرور استفاده شود.</div>
+              <div class="field">
+                <label data-i18n="settings_panel_name">نام پنل</label>
+                <input class="input" type="text" id="settingPanelName" maxlength="40" placeholder="{{ panel_name }}">
+              </div>
+              <div class="field">
+                <label data-i18n="settings_telegram">لینک پشتیبانی تلگرام</label>
+                <input class="input" type="text" id="settingTelegram" maxlength="200" placeholder="@username" style="direction:ltr;">
+              </div>
+              <button class="btn btn-primary btn-sm" id="saveBrandBtn"><span data-i18n="save">ذخیره</span></button>
             </div>
           </div>
 
           <div class="col-6 win">
             <div class="win-head"><h3><svg><use href="#icon-shield"/></svg><span data-i18n="settings_advanced_title">تنظیمات پیشرفته کانفیگ</span></h3></div>
             <div class="win-body">
-              <div class="small muted mb-16" data-i18n="settings_advanced_hint">این مقادیر پیش‌فرض هنگام ساخت کانفیگ‌های جدید برای همه کاربران اعمال می‌شوند.</div>
+              <div class="small muted mb-16" data-i18n="settings_advanced_hint">این مقادیر پیش‌فرض هنگام ساخت کانفیگ‌های جدید اعمال می‌شوند.</div>
               <div class="field">
-                <label data-i18n="inb_fingerprint">اثر انگشت پیش‌فرض (Fingerprint)</label>
+                <label data-i18n="inb_fingerprint">اثر انگشت پیش‌فرض</label>
                 <select class="input" id="settingFingerprint">
                   <option value="chrome" data-i18n="fp_chrome">کروم</option>
                   <option value="ios" data-i18n="fp_ios">آی‌اواس</option>
                   <option value="firefox" data-i18n="fp_firefox">فایرفاکس</option>
                   <option value="edge" data-i18n="fp_edge">اج</option>
+                  <option value="safari">Safari</option>
+                  <option value="android">Android</option>
                   <option value="random" data-i18n="fp_random">تصادفی</option>
                 </select>
               </div>
@@ -276,60 +467,42 @@
                 </select>
               </div>
               <div class="field">
-                <label data-i18n="settings_sni_override">SNI اختصاصی (Domain Fronting — اختیاری)</label>
+                <label data-i18n="settings_sni_override">SNI اختصاصی (اختیاری)</label>
                 <input class="input" type="text" id="settingSniOverride" placeholder="cdn.example.com" style="direction:ltr;">
                 <div class="small muted mt-8" data-i18n="settings_sni_override_hint">اگر خالی باشد، دامنه اصلی به‌عنوان SNI استفاده می‌شود.</div>
               </div>
-              <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:12px 14px;">
+              <div class="setting-row">
                 <div>
-                  <div style="font-weight:700; font-size:13.5px;" data-i18n="settings_fragment">حالت Fragment (بایپس DPI)</div>
-                  <div class="small muted mt-8" data-i18n="tip_fragment">فرگمنت به دور زدن فیلترینگ DPI کمک می‌کند</div>
+                  <div class="title" data-i18n="settings_fragment">حالت Fragment</div>
+                  <div class="hint" data-i18n="tip_fragment">فرگمنت به دور زدن فیلترینگ DPI کمک می‌کند</div>
                 </div>
                 <label class="switch"><input type="checkbox" id="settingFragmentEnabled" checked><span class="track"><span class="thumb"></span></span></label>
               </div>
-              <div class="form-grid mt-12" id="fragmentFields">
+              <div class="form-grid" id="fragmentFields">
                 <div class="field">
                   <label data-i18n="settings_fragment_packets">Packets</label>
-                  <input class="input" type="text" id="settingFragmentPackets" placeholder="tlshello" style="direction:ltr;">
+                  <input class="input mono" type="text" id="settingFragmentPackets" placeholder="tlshello" style="direction:ltr;">
                 </div>
                 <div class="field">
                   <label data-i18n="settings_fragment_length">Length</label>
-                  <input class="input" type="text" id="settingFragmentLength" placeholder="10-30" style="direction:ltr;">
+                  <input class="input mono" type="text" id="settingFragmentLength" placeholder="10-30" style="direction:ltr;">
                 </div>
                 <div class="field span-2">
                   <label data-i18n="settings_fragment_interval">Interval</label>
-                  <input class="input" type="text" id="settingFragmentInterval" placeholder="10-20" style="direction:ltr;">
+                  <input class="input mono" type="text" id="settingFragmentInterval" placeholder="10-20" style="direction:ltr;">
                 </div>
               </div>
-              <button class="btn btn-primary mt-12" id="saveAdvancedBtn"><span data-i18n="save">ذخیره</span></button>
+              <button class="btn btn-primary btn-sm" id="saveAdvancedBtn"><span data-i18n="save">ذخیره</span></button>
             </div>
           </div>
 
-          <!-- ---------- BRANDING ---------- -->
-          <div class="col-6 win">
-            <div class="win-head"><h3><svg><use href="#icon-bolt"/></svg><span data-i18n="settings_brand_title">برندینگ</span></h3></div>
-            <div class="win-body">
-              <div class="small muted mb-16" data-i18n="settings_brand_hint">نام پنل و لینک پشتیبانی در تمام صفحات نمایش داده می‌شود. خالی بگذارید تا مقدار پیش‌فرض سرور استفاده شود.</div>
-              <div class="field">
-                <label data-i18n="settings_panel_name">نام پنل</label>
-                <input class="input" type="text" id="settingPanelName" maxlength="40" placeholder="StanNG">
-              </div>
-              <div class="field">
-                <label data-i18n="settings_telegram">لینک پشتیبانی تلگرام</label>
-                <input class="input" type="text" id="settingTelegram" maxlength="200" placeholder="@username" style="direction:ltr;">
-              </div>
-              <button class="btn btn-primary mt-12" id="saveBrandBtn"><span data-i18n="save">ذخیره</span></button>
-            </div>
-          </div>
-
-          <!-- ---------- RELAY SAFETY ---------- -->
           <div class="col-6 win">
             <div class="win-head"><h3><svg><use href="#icon-shield"/></svg><span data-i18n="settings_relay_title">امنیت رله</span></h3></div>
             <div class="win-body">
-              <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:12px 14px;">
+              <div class="setting-row">
                 <div>
-                  <div style="font-weight:700; font-size:13.5px;" data-i18n="settings_allow_private">اجازه اتصال به شبکه داخلی</div>
-                  <div class="small muted mt-8" data-i18n="settings_allow_private_hint">خاموش بماند. اگر روشن شود، کاربران می‌توانند به 127.0.0.1 و سرویس متادیتای سرور (169.254.169.254) دسترسی پیدا کنند.</div>
+                  <div class="title" data-i18n="settings_allow_private">اجازه اتصال به شبکه داخلی</div>
+                  <div class="hint" data-i18n="settings_allow_private_hint">خاموش بماند. اگر روشن شود، کاربران می‌توانند به 127.0.0.1 و سرویس متادیتای سرور دسترسی پیدا کنند.</div>
                 </div>
                 <label class="switch"><input type="checkbox" id="settingAllowPrivate"><span class="track"><span class="thumb"></span></span></label>
               </div>
@@ -338,22 +511,23 @@
                 <input class="input" type="number" id="settingIdleTimeout" min="0" max="86400" step="30" placeholder="600" style="direction:ltr;">
                 <div class="small muted mt-8" data-i18n="settings_idle_timeout_hint">۰ یعنی هرگز. اتصال‌های مرده سهمیه «اتصال همزمان» کاربر را اشغال می‌کنند.</div>
               </div>
-              <button class="btn btn-primary mt-12" id="saveRelayBtn"><span data-i18n="save">ذخیره</span></button>
+              <div class="field">
+                <label data-i18n="settings_history_days">نگهداری تاریخچه مصرف (روز)</label>
+                <input class="input" type="number" id="settingHistoryDays" min="1" max="90" step="1" placeholder="30" style="direction:ltr;">
+              </div>
+              <button class="btn btn-primary btn-sm" id="saveRelayBtn"><span data-i18n="save">ذخیره</span></button>
             </div>
           </div>
 
-          <!-- ---------- BACKUP / RESTORE ---------- -->
           <div class="col-6 win">
             <div class="win-head"><h3><svg><use href="#icon-download"/></svg><span data-i18n="settings_backup_title">پشتیبان‌گیری</span></h3></div>
             <div class="win-body flex-col gap-12">
               <div class="small muted" data-i18n="settings_backup_hint">فایل پشتیبان شامل کاربران، تنظیمات و هش رمز ادمین است. آن را جای امنی نگه دارید.</div>
-              <button class="btn btn-azure" id="backupBtn"><svg width="16" height="16"><use href="#icon-download"/></svg><span data-i18n="settings_backup_download">دانلود فایل پشتیبان</span></button>
-              <hr style="border-color:var(--border-soft); width:100%; margin:4px 0;">
+              <button class="btn btn-sm" id="backupBtn"><svg><use href="#icon-download"/></svg><span data-i18n="settings_backup_download">دانلود فایل پشتیبان</span></button>
+              <hr>
               <div class="small muted" data-i18n="settings_restore_hint">بازیابی، تمام داده‌های فعلی را جایگزین می‌کند و شما را از پنل خارج می‌کند.</div>
               <input type="file" id="restoreFile" accept="application/json,.json" style="display:none;">
-              <button class="btn btn-ghost" id="restoreBtn"><span data-i18n="settings_restore">بازیابی از فایل</span></button>
-              <hr style="border-color:var(--border-soft); width:100%; margin:4px 0;">
-              <button class="btn btn-ghost" id="logoutAllBtn" style="color:var(--crimson)"><span data-i18n="settings_logout_all">خروج از همه دستگاه‌ها</span></button>
+              <button class="btn btn-sm btn-danger" id="restoreBtn"><span data-i18n="settings_restore">بازیابی از فایل</span></button>
             </div>
           </div>
         </div>
@@ -363,16 +537,20 @@
   </div>
 </div>
 
-<!-- ============ MODAL: Add/Edit Inbound ============ -->
+<!-- ============ MODAL: add / edit user ============ -->
 <div class="modal-overlay" id="inboundModal">
   <div class="modal">
     <div class="modal-head">
       <h3 id="inboundModalTitle" data-i18n="inb_add">کاربر جدید</h3>
-      <button class="icon-btn" data-close-modal="inboundModal"><svg width="16" height="16"><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+      <button class="icon-btn" data-close-modal="inboundModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
     </div>
     <div class="modal-body">
       <form id="inboundForm">
         <input type="hidden" id="inboundUid">
+        <div class="field" id="planPickerField">
+          <label data-i18n="inb_from_plan">اعمال از روی پلن</label>
+          <select class="input" id="fPlan"><option value="" data-i18n="inb_no_plan">— بدون پلن —</option></select>
+        </div>
         <div class="form-grid">
           <div class="field span-2">
             <label data-i18n="inb_name">نام</label>
@@ -394,28 +572,30 @@
             <label data-i18n="inb_max_req">سقف درخواست</label>
             <input class="input" type="number" id="fMaxReq" min="0" step="1" placeholder="0 = ∞">
           </div>
-          <div class="field">
-            <label data-i18n="inb_fingerprint">اثر انگشت (Fingerprint)</label>
+          <div class="field span-2">
+            <label data-i18n="inb_fingerprint">اثر انگشت</label>
             <select class="input" id="fFingerprint">
               <option value="chrome" data-i18n="fp_chrome">کروم</option>
               <option value="ios" data-i18n="fp_ios">آی‌اواس</option>
               <option value="firefox" data-i18n="fp_firefox">فایرفاکس</option>
               <option value="edge" data-i18n="fp_edge">اج</option>
+              <option value="safari">Safari</option>
+              <option value="android">Android</option>
               <option value="random" data-i18n="fp_random">تصادفی</option>
             </select>
-          </div>
-          <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:10px 12px; margin-top:20px;">
-            <span class="small" data-i18n="inb_strict_ip">قفل روی اولین IP</span>
-            <label class="switch"><input type="checkbox" id="fStrictIp"><span class="track"><span class="thumb"></span></span></label>
-          </div>
-          <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:10px 12px; margin-top:20px;">
-            <span class="small" data-i18n="inb_enabled">فعال</span>
-            <label class="switch"><input type="checkbox" id="fEnabled" checked><span class="track"><span class="thumb"></span></span></label>
           </div>
           <div class="field span-2">
             <label data-i18n="inb_note">یادداشت</label>
             <input class="input" type="text" id="fNote" maxlength="200">
           </div>
+        </div>
+        <div class="setting-row">
+          <div class="title small" data-i18n="inb_strict_ip">قفل روی اولین IP</div>
+          <label class="switch"><input type="checkbox" id="fStrictIp"><span class="track"><span class="thumb"></span></span></label>
+        </div>
+        <div class="setting-row" style="margin-bottom:0;">
+          <div class="title small" data-i18n="inb_enabled">فعال</div>
+          <label class="switch"><input type="checkbox" id="fEnabled" checked><span class="track"><span class="thumb"></span></span></label>
         </div>
       </form>
     </div>
@@ -426,12 +606,98 @@
   </div>
 </div>
 
-<!-- ============ MODAL: Renew ============ -->
+<!-- ============ MODAL: bulk create ============ -->
+<div class="modal-overlay" id="bulkModal">
+  <div class="modal" style="max-width:480px;">
+    <div class="modal-head">
+      <h3 data-i18n="inb_bulk_create">ساخت گروهی کاربر</h3>
+      <button class="icon-btn" data-close-modal="bulkModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label data-i18n="inb_from_plan">اعمال از روی پلن</label>
+        <select class="input" id="bulkPlan"><option value="" data-i18n="inb_no_plan">— بدون پلن —</option></select>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label data-i18n="bulk_count">تعداد</label>
+          <input class="input" type="number" id="bulkCountInput" min="1" max="200" step="1" value="10" style="direction:ltr;">
+        </div>
+        <div class="field">
+          <label data-i18n="bulk_prefix">پیشوند نام</label>
+          <input class="input" type="text" id="bulkPrefix" maxlength="40" value="user" style="direction:ltr;">
+        </div>
+        <div class="field">
+          <label data-i18n="inb_quota">حجم (GB)</label>
+          <input class="input" type="number" id="bulkQuota" min="0" step="0.1" placeholder="0 = ∞">
+        </div>
+        <div class="field">
+          <label data-i18n="inb_expire">اعتبار (روز)</label>
+          <input class="input" type="number" id="bulkExpire" min="0" step="1" placeholder="0 = ∞">
+        </div>
+        <div class="field">
+          <label data-i18n="inb_max_conn">اتصال همزمان</label>
+          <input class="input" type="number" id="bulkMaxConn" min="0" step="1" placeholder="0 = ∞">
+        </div>
+        <div class="field">
+          <label data-i18n="bulk_start">شروع شماره از</label>
+          <input class="input" type="number" id="bulkStart" min="1" step="1" value="1" style="direction:ltr;">
+        </div>
+      </div>
+      <div class="small muted"><span data-i18n="bulk_preview">نمونه نام‌ها</span>: <b class="mono" id="bulkPreview">user-01 … user-10</b></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="bulkModal"><span data-i18n="cancel">انصراف</span></button>
+      <button class="btn btn-primary" id="bulkSaveBtn"><span data-i18n="bulk_create_btn">ساخت</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: plan ============ -->
+<div class="modal-overlay" id="planModal">
+  <div class="modal" style="max-width:460px;">
+    <div class="modal-head">
+      <h3 id="planModalTitle" data-i18n="plans_add">پلن جدید</h3>
+      <button class="icon-btn" data-close-modal="planModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="planId">
+      <div class="field">
+        <label data-i18n="plans_name">نام پلن</label>
+        <input class="input" type="text" id="planName" maxlength="48" placeholder="۳۰ روز / ۵۰ گیگ">
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label data-i18n="inb_quota">حجم (GB)</label>
+          <input class="input" type="number" id="planQuota" min="0" step="0.1" placeholder="0 = ∞">
+        </div>
+        <div class="field">
+          <label data-i18n="inb_expire">مدت (روز)</label>
+          <input class="input" type="number" id="planDays" min="0" step="1" placeholder="0 = ∞">
+        </div>
+        <div class="field">
+          <label data-i18n="inb_max_conn">اتصال همزمان</label>
+          <input class="input" type="number" id="planMaxConn" min="0" step="1" placeholder="0 = ∞">
+        </div>
+        <div class="field">
+          <label data-i18n="inb_max_req">سقف درخواست</label>
+          <input class="input" type="number" id="planMaxReq" min="0" step="1" placeholder="0 = ∞">
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="planModal"><span data-i18n="cancel">انصراف</span></button>
+      <button class="btn btn-primary" id="planSaveBtn"><span data-i18n="save">ذخیره</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: renew ============ -->
 <div class="modal-overlay" id="renewModal">
   <div class="modal" style="max-width:420px;">
     <div class="modal-head">
       <h3 data-i18n="inb_renew">تمدید اشتراک</h3>
-      <button class="icon-btn" data-close-modal="renewModal"><svg width="16" height="16"><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+      <button class="icon-btn" data-close-modal="renewModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="renewUid">
@@ -440,73 +706,132 @@
         <label data-i18n="inb_renew_days">تعداد روز</label>
         <input class="input" type="number" id="renewDays" min="1" max="3650" step="1" value="30" style="direction:ltr;">
       </div>
-      <div class="field flex items-center justify-between" style="border:1px solid var(--border-soft); border-radius:12px; padding:10px 12px;">
-        <span class="small" data-i18n="inb_renew_reset">ریست کردن حجم مصرفی</span>
+      <div class="setting-row" style="margin-bottom:0;">
+        <div class="title small" data-i18n="inb_renew_reset">ریست کردن حجم مصرفی</div>
         <label class="switch"><input type="checkbox" id="renewResetUsage" checked><span class="track"><span class="thumb"></span></span></label>
       </div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" data-close-modal="renewModal"><span data-i18n="cancel">انصراف</span></button>
-      <button class="btn btn-primary" id="renewSaveBtn"><span data-i18n="inb_renew">تمدید اشتراک</span></button>
+      <button class="btn btn-primary" id="renewSaveBtn"><span data-i18n="inb_renew">تمدید</span></button>
     </div>
   </div>
 </div>
 
-<!-- ============ MODAL: Links / QR ============ -->
+<!-- ============ MODAL: links / QR ============ -->
 <div class="modal-overlay" id="linksModal">
   <div class="modal">
     <div class="modal-head">
       <h3 data-i18n="inb_links">لینک‌ها</h3>
-      <button class="icon-btn" data-close-modal="linksModal"><svg width="16" height="16"><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+      <button class="icon-btn" data-close-modal="linksModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
     </div>
     <div class="modal-body flex-col gap-16">
       <div class="text-center">
-        <div class="qr-box" id="qrBox"><img id="qrImg" width="180" height="180" alt="QR"></div>
+        <div class="qr-box" id="qrBox"><img id="qrImg" width="164" height="164" alt="QR"></div>
       </div>
-      
-      <!-- لینک TLS -->
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_link_tls">کانفیگ TLS (پورت ۴۴۳)</label>
-        <div class="link-row"><code id="linkTls"></code><button class="icon-btn btn-sm" data-copy="linkTls"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
+        <div class="link-row"><code id="linkTls"></code><button class="icon-btn btn-sm" data-copy="linkTls" title="copy"><svg><use href="#icon-copy"/></svg></button></div>
       </div>
-      
-      <!-- لینک اشتراک -->
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_sub_link">لینک اشتراک (سازگار با v2rayNG)</label>
-        <div class="link-row"><code id="linkSub"></code><button class="icon-btn btn-sm" data-copy="linkSub"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
-        <div class="small muted mt-8" style="color:var(--gold-300);">
-          <svg width="14" height="14" style="vertical-align:-2px;"><use href="#icon-info"/></svg>
-          <span data-i18n="inb_sub_note">حجم و تاریخ انقضا از طریق هدر استاندارد Subscription-Userinfo مستقیماً داخل کلاینت نمایش داده می‌شود.</span>
+        <div class="link-row"><code id="linkSub"></code><button class="icon-btn btn-sm" data-copy="linkSub" title="copy"><svg><use href="#icon-copy"/></svg></button></div>
+        <div class="small muted mt-8">
+          <svg width="12" height="12" style="vertical-align:-2px;"><use href="#icon-info"/></svg>
+          <span data-i18n="inb_sub_note">حجم و تاریخ انقضا از طریق هدر استاندارد Subscription-Userinfo داخل کلاینت نمایش داده می‌شود.</span>
         </div>
       </div>
-      
-      <!-- لینک وضعیت -->
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_status_link">لینک وضعیت (برای کاربر)</label>
-        <div class="link-row"><code id="linkStatus"></code><button class="icon-btn btn-sm" data-copy="linkStatus"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
+        <div class="link-row"><code id="linkStatus"></code><button class="icon-btn btn-sm" data-copy="linkStatus" title="copy"><svg><use href="#icon-copy"/></svg></button></div>
       </div>
-      
-      <!-- لینک JSON -->
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_sub_link_json">لینک اشتراک JSON</label>
-        <div class="link-row"><code id="linkSubJson"></code><button class="icon-btn btn-sm" data-copy="linkSubJson"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
+        <div class="link-row"><code id="linkSubJson"></code><button class="icon-btn btn-sm" data-copy="linkSubJson" title="copy"><svg><use href="#icon-copy"/></svg></button></div>
       </div>
-
-      <!-- IP های فعال -->
       <div id="activeIpsBlock" style="display:none;">
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_active_ips">IP های متصل در این لحظه</label>
-        <div class="small" id="activeIpsList" style="direction:ltr;"></div>
-      </div>
-
-      <!-- توضیحات نهایی -->
-      <div class="small muted" style="border-top:1px solid var(--border-soft); padding-top:14px;">
-        <span data-i18n="inb_info_configs_note">لینک اشتراک یک کانفیگ TLS واقعی برمی‌گرداند. کلاینت‌هایی مثل v2rayNG، Nekobox و Clash حجم مصرفی و تاریخ انقضا را از هدر Subscription-Userinfo می‌خوانند و در همان صفحه اشتراک نشان می‌دهند.</span>
+        <div class="code-block small" id="activeIpsList"></div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- مودال Clean IP حذف شد -->
+<!-- ============ MODAL: per-user history ============ -->
+<div class="modal-overlay" id="historyModal">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-head">
+      <h3><span data-i18n="traffic_history">تاریخچه مصرف</span> — <span id="historyName" class="muted"></span></h3>
+      <button class="icon-btn" data-close-modal="historyModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="chart-wrap"><canvas id="historyChart" height="220"></canvas></div>
+      <div class="chart-legend">
+        <span class="chart-legend-item" style="color:var(--info)"><i></i><span data-i18n="dash_upload">آپلود</span></span>
+        <span class="chart-legend-item" style="color:var(--accent)"><i></i><span data-i18n="dash_download">دانلود</span></span>
+      </div>
+      <div class="small muted mt-12" id="historySummary"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: 2FA enrolment ============ -->
+<div class="modal-overlay" id="twofaModal">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-head">
+      <h3 data-i18n="twofa_setup_title">فعال‌سازی ورود دومرحله‌ای</h3>
+      <button class="icon-btn" data-close-modal="twofaModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div id="twofaStep1">
+        <div class="small muted mb-16" data-i18n="twofa_step1">این کد QR را با Google Authenticator، Aegis یا هر اپ مشابه اسکن کنید.</div>
+        <div class="text-center mb-16">
+          <div class="qr-box"><img id="twofaQr" width="176" height="176" alt="2FA QR"></div>
+        </div>
+        <div class="field">
+          <label data-i18n="twofa_manual">یا این کلید را دستی وارد کنید</label>
+          <div class="code-block" id="twofaSecret"></div>
+        </div>
+        <div class="field">
+          <label data-i18n="twofa_enter_code">کد ۶ رقمی نمایش‌داده‌شده</label>
+          <input class="input mono" type="text" id="twofaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" style="direction:ltr; text-align:center; letter-spacing:.3em;">
+        </div>
+      </div>
+      <div id="twofaStep2" style="display:none;">
+        <div class="small mb-16" style="color:var(--warn)" data-i18n="twofa_recovery_warn">این کدهای بازیابی را همین حالا ذخیره کنید. هر کد فقط یک‌بار کار می‌کند و دیگر نمایش داده نمی‌شود.</div>
+        <div class="recovery-grid" id="twofaRecoveryCodes"></div>
+        <button class="btn btn-sm w-full mt-16" id="twofaCopyCodes"><svg><use href="#icon-copy"/></svg><span data-i18n="copy">کپی</span></button>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="twofaModal"><span data-i18n="cancel">انصراف</span></button>
+      <button class="btn btn-primary" id="twofaConfirmBtn"><span data-i18n="twofa_confirm">تأیید و فعال‌سازی</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: password confirm ============ -->
+<div class="modal-overlay" id="confirmPassModal">
+  <div class="modal" style="max-width:380px;">
+    <div class="modal-head">
+      <h3 id="confirmPassTitle" data-i18n="confirm_password">تأیید رمز عبور</h3>
+      <button class="icon-btn" data-close-modal="confirmPassModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="small muted mb-16" data-i18n="confirm_password_hint">برای این عملیات رمز عبور حساب لازم است.</div>
+      <div class="field" style="margin-bottom:0;">
+        <div class="input-wrap">
+          <svg class="input-icon"><use href="#icon-key"/></svg>
+          <input class="input" type="password" id="confirmPassInput" autocomplete="current-password">
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="confirmPassModal"><span data-i18n="cancel">انصراف</span></button>
+      <button class="btn btn-primary" id="confirmPassBtn"><span data-i18n="confirm">تأیید</span></button>
+    </div>
+  </div>
+</div>
 
 <script src="/static/js/i18n.js?v={{ app_version }}"></script>
 <script src="/static/js/common.js?v={{ app_version }}"></script>

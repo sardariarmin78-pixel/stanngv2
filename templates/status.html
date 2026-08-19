@@ -2,33 +2,42 @@
 <html lang="fa" dir="rtl" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="robots" content="noindex, nofollow">
 <title>{{ panel_name }} · Status</title>
-<link rel="icon" href="/static/img/favicon-32.png">
-<link rel="apple-touch-icon" href="/static/img/favicon-180.png">
+<link rel="icon" href="/static/img/favicon.svg?v={{ app_version }}" type="image/svg+xml">
 <link rel="stylesheet" href="/static/css/fonts.css?v={{ app_version }}">
 <link rel="stylesheet" href="/static/css/theme.css?v={{ app_version }}">
 <link rel="stylesheet" href="/static/css/dashboard.css?v={{ app_version }}">
 </head>
 <body>
 {% include "_icons.html" %}
-<a class="telegram-fab" href="{{ telegram_contact }}" target="_blank" rel="noopener" title="پشتیبانی تلگرام / Telegram Support">
+
+<div class="auth-top">
+  <div class="lang-toggle">
+    <button type="button" data-lang="fa">FA</button>
+    <button type="button" data-lang="en">EN</button>
+  </div>
+  <button class="icon-btn" id="themeToggle" title="theme"><svg><use href="#icon-moon"/></svg></button>
+</div>
+
+<a class="telegram-fab" href="{{ telegram_contact }}" target="_blank" rel="noopener" title="پشتیبانی / Support">
   <svg><use href="#icon-telegram"/></svg>
 </a>
+
 <div class="auth-shell">
-  <div class="sparkle-field"></div>
-  <div class="auth-card" style="max-width:460px;">
-    <img class="auth-logo" src="/static/img/logo-square.png" alt="{{ panel_name }}">
-    <div class="brand-title" data-i18n="status_page_title">وضعیت اشتراک</div>
-    <div id="statusContent" data-uid="{{ uid }}" class="mt-20">
-      <div class="text-center muted" data-i18n="loading">در حال بارگذاری...</div>
-    </div>
-    <div class="flex justify-between items-center mt-24">
-      <div class="lang-toggle">
-        <button type="button" data-lang="fa">FA</button>
-        <button type="button" data-lang="en">EN</button>
+  <div class="auth-card" style="max-width:420px;">
+    <svg class="auth-logo"><use href="#brand-mark"/></svg>
+    <div class="brand-title">{{ panel_name }}</div>
+    <div class="brand-sub" data-i18n="status_subtitle">وضعیت اشتراک شما</div>
+
+    <div id="statusContent" data-uid="{{ uid }}">
+      <div class="flex-col gap-12">
+        <div class="skeleton" style="height:20px; width:60%; margin:0 auto;"></div>
+        <div class="skeleton" style="height:10px;"></div>
+        <div class="skeleton" style="height:56px;"></div>
       </div>
-      <button class="icon-btn" id="themeToggle" title="theme"><svg><use href="#icon-moon"/></svg></button>
     </div>
   </div>
 </div>
