@@ -213,6 +213,44 @@ def cleanup_journals(directory: str):
             pass
 
 
+class LeaderLock:
+    """Elects exactly one worker to run the cluster-wide singleton jobs.
+
+    lifespan runs in every worker, so without this each of them would send
+    its own copy of every Telegram alert and upload its own backup — N
+    workers meaning N duplicates. Per-worker jobs (traffic folding, journal
+    publishing, connection enforcement) deliberately do *not* use this: each
+    worker owns that state.
+
+    Leadership is held by keeping the lock file open. If the leader dies the
+    OS drops the lock and the next worker to poll takes over.
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = None
+
+    def is_leader(self) -> bool:
+        return self._lock is not None
+
+    def try_acquire(self) -> bool:
+        """Non-blocking. True if this worker is (or just became) the leader."""
+        if self._lock is not None:
+            return True
+        candidate = FileLock(self.path, timeout=0)
+        try:
+            candidate.acquire()
+        except (TimeoutError, OSError):
+            return False
+        self._lock = candidate
+        return True
+
+    def release(self):
+        if self._lock is not None:
+            self._lock.release()
+            self._lock = None
+
+
 def _read_first(path: str):
     try:
         with open(path, "r") as f:
