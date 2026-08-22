@@ -38,6 +38,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 import backup
 import cluster
+import fragments
 import notify
 import subscription
 import totp
@@ -115,6 +116,7 @@ ENFORCE_INTERVAL = 10       # seconds: kick sessions that ran past their limits
 COLO_CACHE_TTL = 3600       # seconds: the edge datacentre does not move often
 NOTIFY_INTERVAL = 300       # seconds: scan for quota/expiry alerts
 BACKUP_CHECK_INTERVAL = 900 # seconds: how often to consider an auto-backup
+CLEANUP_INTERVAL = 3600     # seconds: how often to sweep expired accounts
 USERBOT_IDLE_SLEEP = 3      # seconds to back off after a bot polling error
 JOURNAL_INTERVAL = 1        # seconds: publish this worker's runtime slice
 
@@ -203,6 +205,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_notify_loop()),
         asyncio.create_task(_backup_loop()),
         asyncio.create_task(_userbot_loop()),
+        asyncio.create_task(_cleanup_loop()),
     ]
     try:
         yield
@@ -913,6 +916,103 @@ async def _userbot_loop():
             await asyncio.sleep(USERBOT_IDLE_SLEEP)
 
 
+def _retention_plan(db, now: Optional[float] = None) -> dict:
+    """Decide what a cleanup sweep would do, without doing it.
+
+    Separated so the rules can be tested directly — this deletes paying
+    customers' accounts if it gets them wrong.
+    """
+    now = now if now is not None else time.time()
+    settings = db.get("settings") or {}
+    if not settings.get("cleanup_enabled"):
+        return {"disable": [], "delete": []}
+
+    try:
+        disable_after = max(0, int(settings.get("cleanup_disable_days", 3)))
+    except (TypeError, ValueError):
+        disable_after = 3
+    try:
+        delete_after = max(0, int(settings.get("cleanup_delete_days", 30)))
+    except (TypeError, ValueError):
+        delete_after = 30
+
+    disable, delete = [], []
+    for ib in db.get("inbounds", []):
+        expire_at = ib.get("expire_at")
+        # An account with no expiry never ages out, however old it is.
+        if not expire_at or now < expire_at:
+            continue
+        days_past = (now - expire_at) / 86400
+
+        # Trials are disposable by definition and go on the shorter clock.
+        is_trial = bool(ib.get("is_trial"))
+        delete_threshold = 1 if is_trial and delete_after else delete_after
+
+        if delete_after and days_past >= delete_threshold:
+            delete.append(ib["uid"])
+        elif days_past >= disable_after and ib.get("enabled", True):
+            disable.append(ib["uid"])
+    return {"disable": disable, "delete": delete}
+
+
+async def _run_cleanup() -> dict:
+    """Apply one retention sweep and report what changed."""
+    db = await store.get()
+    plan = _retention_plan(db)
+    if not plan["disable"] and not plan["delete"]:
+        return {"disabled": 0, "deleted": 0}
+
+    to_disable = set(plan["disable"])
+    to_delete = set(plan["delete"])
+
+    def _apply(db):
+        for ib in db["inbounds"]:
+            if ib.get("uid") in to_disable:
+                ib["enabled"] = False
+        if to_delete:
+            db["inbounds"] = [ib for ib in db["inbounds"]
+                              if ib.get("uid") not in to_delete]
+        db["last_cleanup"] = {"ts": time.time(),
+                              "disabled": len(to_disable), "deleted": len(to_delete)}
+
+    await store.mutate(_apply)
+
+    for uid in to_disable | to_delete:
+        await _disconnect_uid(uid)
+    for uid in to_delete:
+        runtime["active"].pop(uid, None)
+        runtime["pending_traffic"].pop(uid, None)
+        runtime["pending_requests"].pop(uid, None)
+
+    return {"disabled": len(to_disable), "deleted": len(to_delete)}
+
+
+async def _cleanup_loop():
+    while True:
+        try:
+            await asyncio.sleep(CLEANUP_INTERVAL)
+            if not _is_leader():
+                continue
+            result = await _run_cleanup()
+            if result["disabled"] or result["deleted"]:
+                db = await store.get()
+                token, chat, _ = _notify_config(db)
+                if token:
+                    panel = brand(db)["panel_name"]
+                    try:
+                        await notify.send_message(
+                            token, chat,
+                            f"🧹 <b>{panel}</b>\n\n"
+                            f"غیرفعال شده: {result['disabled']}\n"
+                            f"حذف شده: {result['deleted']}")
+                    except notify.TelegramError:
+                        pass
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(120)
+
+
 async def _keep_alive_loop():
     """Ping our own public URL so free-tier hosts don't idle the service out.
 
@@ -1193,14 +1293,14 @@ VALID_ALPN = {"http/1.1", "h2,http/1.1", "h3,h2,http/1.1"}
 BOOL_SETTINGS = {
     "keep_alive", "fragment_enabled", "allow_private_destinations",
     "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
-    "auto_backup_enabled", "userbot_enabled",
+    "auto_backup_enabled", "userbot_enabled", "cleanup_enabled", "trial_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
     "fragment_packets": 32, "fragment_length": 32, "fragment_interval": 32,
     "panel_name": 40, "telegram_contact": 200,
     "telegram_bot_token": 100, "telegram_chat_id": 40,
-    "userbot_token": 100,
+    "userbot_token": 100, "trial_prefix": 40,
 }
 # Numeric settings: name -> (min, max)
 INT_SETTINGS = {
@@ -1209,6 +1309,9 @@ INT_SETTINGS = {
     "notify_expiry_days": (0, 60),
     "history_days": (1, 90),
     "auto_backup_hours": (1, 168),
+    "cleanup_disable_days": (0, 365),
+    "cleanup_delete_days": (0, 3650),
+    "trial_days": (1, 30),
 }
 OTA_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$")
 
@@ -1250,6 +1353,14 @@ async def api_update_settings(request: Request, user: str = Depends(require_auth
                 clean[k] = max(lo, min(hi, int(payload[k])))
             except (TypeError, ValueError):
                 raise HTTPException(400, f"invalid-{k}")
+
+    if "fragment_profile" in payload:
+        if payload["fragment_profile"] not in fragments.PROFILES:
+            raise HTTPException(400, "invalid-fragment_profile")
+        clean["fragment_profile"] = payload["fragment_profile"]
+
+    if "trial_gb" in payload:
+        clean["trial_gb"] = _as_number(payload["trial_gb"], "trial_gb", 0, 1000, False)
 
     def _apply(db):
         db.setdefault("settings", {}).update(clean)
@@ -1623,6 +1734,85 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
     return {"ok": True, "inbound": serialize_inbound(inbound_by_uid(db, uid))}
 
 
+# ------------------------------------------------------------------ trials & retention
+@app.get("/api/fragment-profiles")
+async def api_fragment_profiles(user: str = Depends(require_auth)):
+    db = await store.get()
+    return {"profiles": fragments.catalogue(),
+            "current": (db.get("settings") or {}).get("fragment_profile",
+                                                      fragments.DEFAULT_PROFILE),
+            "resolved": fragments.as_param(db.get("settings") or {})}
+
+
+@app.post("/api/inbounds/trial")
+async def api_create_trial(request: Request, user: str = Depends(require_auth)):
+    """One-click throwaway account, sized from settings."""
+    db = await store.get()
+    settings = db.get("settings") or {}
+    if not settings.get("trial_enabled", True):
+        raise HTTPException(400, "trial-disabled")
+    if len(db["inbounds"]) >= MAX_INBOUNDS:
+        raise HTTPException(400, "inbound-limit-reached")
+
+    try:
+        quota_gb = float(settings.get("trial_gb", 1) or 0)
+        days = max(1, int(settings.get("trial_days", 1) or 1))
+    except (TypeError, ValueError):
+        quota_gb, days = 1.0, 1
+    prefix = (settings.get("trial_prefix") or "trial").strip()[:40] or "trial"
+
+    now = time.time()
+    existing = sum(1 for ib in db["inbounds"] if ib.get("is_trial"))
+    ib = {
+        "uid": gen_uid(),
+        "uuid": gen_uuid(),
+        "name": f"{prefix}-{existing + 1:03d}",
+        "enabled": True,
+        "created_at": now,
+        "expire_at": now + days * 86400,
+        "expire_days": days,
+        "quota_gb": quota_gb,
+        "max_connections": 1,
+        "max_requests": 0,
+        "request_count": 0,
+        "used_up": 0,
+        "used_down": 0,
+        "history": [],
+        "fp": settings.get("default_fingerprint", "chrome"),
+        "strict_single_ip": False,
+        "note": "",
+        # Marks it disposable: retention deletes trials a day after expiry
+        # rather than keeping them for the full window.
+        "is_trial": True,
+    }
+
+    def _apply(db):
+        db["inbounds"].append(ib)
+
+    await store.mutate(_apply)
+    return {"ok": True, "inbound": serialize_inbound(ib)}
+
+
+@app.get("/api/cleanup")
+async def api_cleanup_preview(user: str = Depends(require_auth)):
+    """What a sweep would do right now, so it can be checked before enabling."""
+    db = await store.get()
+    plan = _retention_plan(db)
+    names = {ib["uid"]: ib.get("name") for ib in db.get("inbounds", [])}
+    return {
+        "enabled": bool((db.get("settings") or {}).get("cleanup_enabled")),
+        "last": db.get("last_cleanup"),
+        "would_disable": [{"uid": u, "name": names.get(u)} for u in plan["disable"]],
+        "would_delete": [{"uid": u, "name": names.get(u)} for u in plan["delete"]],
+    }
+
+
+@app.post("/api/cleanup")
+async def api_cleanup_now(user: str = Depends(require_auth)):
+    result = await _run_cleanup()
+    return {"ok": True, **result}
+
+
 # ------------------------------------------------------------------ plans
 MAX_PLANS = 50
 
@@ -1872,12 +2062,11 @@ def _vless_link(ib, address: str, port: int, path: str, sni: str, fp: str,
         f"alpn={quote(alpn, safe=',/')}",
     ]
     # Fragment settings were stored and shown in the UI but never reached the
-    # link, so turning fragmentation on in the panel did nothing at all.
-    if settings.get("fragment_enabled"):
-        packets = (settings.get("fragment_packets") or "tlshello").strip()
-        length = (settings.get("fragment_length") or "10-30").strip()
-        interval = (settings.get("fragment_interval") or "10-20").strip()
-        params.append(f"fragment={quote(f'{packets},{length},{interval}')}")
+    # link, so turning fragmentation on in the panel did nothing at all. The
+    # profile decides the values; "custom" defers to the typed ones.
+    fragment = fragments.as_param(settings)
+    if fragment:
+        params.append(f"fragment={quote(fragment)}")
     return f"vless://{ib['uuid']}@{address}:{port}?{'&'.join(params)}#{quote(remark)}"
 
 

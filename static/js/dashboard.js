@@ -49,6 +49,14 @@
     set('settingNotifyPercent', s.notify_quota_percent != null ? s.notify_quota_percent : 80);
     check('settingNotifyExpiry', s.notify_expiry_enabled !== false);
     check('settingAutoBackup', !!s.auto_backup_enabled);
+    check('settingCleanup', !!s.cleanup_enabled);
+    set('settingCleanupDisable', s.cleanup_disable_days != null ? s.cleanup_disable_days : 3);
+    set('settingCleanupDelete', s.cleanup_delete_days != null ? s.cleanup_delete_days : 30);
+    check('settingTrialEnabled', s.trial_enabled !== false);
+    set('settingTrialGb', s.trial_gb != null ? s.trial_gb : 1);
+    set('settingTrialDays', s.trial_days != null ? s.trial_days : 1);
+    set('settingTrialPrefix', s.trial_prefix || 'trial');
+    loadFragmentProfiles(s.fragment_profile);
     check('settingUserbotEnabled', !!s.userbot_enabled);
     set('settingUserbotToken', s.userbot_token || '');
     set('settingBackupHours', s.auto_backup_hours != null ? s.auto_backup_hours : 6);
@@ -77,7 +85,7 @@
     if (name === 'plans') loadPlans();
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security') { loadTwofaStatus(); loadLoginLog(); }
-    if (name === 'settings') loadBackupStatus();
+    if (name === 'settings') { loadBackupStatus(); loadCleanupStatus(); }
     if (name === 'notifications') loadUserbotStatus();
     closeSidebarMobile();
     PEYK.playSfx('open', 0.25);
@@ -1207,6 +1215,124 @@
       const msg = e.detail === 'not-configured' ? PEYK.t('ub_no_token') : (e.detail || 'error');
       PEYK.toast(msg, 'error', 7000);
     } finally { PEYK.setLoading(btn, false); }
+  });
+
+  // ---------------- fragment profiles ----------------
+  async function loadFragmentProfiles(current) {
+    try {
+      const r = await PEYK.api('/api/fragment-profiles');
+      const sel = $('settingFragmentProfile');
+      sel.innerHTML = '';
+      const lang = PEYK.getLang();
+      r.profiles.forEach(p => {
+        const o = document.createElement('option');
+        o.value = p.id;
+        o.textContent = lang === 'fa' ? p.label_fa : p.label_en;
+        o.dataset.note = lang === 'fa' ? p.note_fa : p.note_en;
+        sel.appendChild(o);
+      });
+      sel.value = current || r.current;
+      applyFragmentProfileState();
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function applyFragmentProfileState() {
+    const sel = $('settingFragmentProfile');
+    const opt = sel.options[sel.selectedIndex];
+    $('fragmentProfileNote').textContent = opt ? (opt.dataset.note || '') : '';
+    // The three raw fields only mean anything on the custom profile.
+    const custom = sel.value === 'custom';
+    const fields = $('fragmentFields');
+    fields.style.opacity = custom ? '1' : '.45';
+    fields.style.pointerEvents = custom ? 'auto' : 'none';
+  }
+  $('settingFragmentProfile').addEventListener('change', applyFragmentProfileState);
+
+  // ---------------- trial accounts ----------------
+  $('trialBtn').addEventListener('click', async () => {
+    const btn = $('trialBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/inbounds/trial', { method: 'POST' });
+      PEYK.toast(PEYK.t('trial_created').replace('{name}', r.inbound.name), 'success');
+      await loadInbounds();
+      showLinks(r.inbound.uid);
+    } catch (e) {
+      const msg = e.detail === 'trial-disabled' ? PEYK.t('trial_disabled') : (e.detail || 'error');
+      PEYK.toast(msg, 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+  $('saveTrialBtn').addEventListener('click', () => {
+    saveSettings('saveTrialBtn', {
+      trial_enabled: $('settingTrialEnabled').checked,
+      trial_gb: Number($('settingTrialGb').value) || 0,
+      trial_days: parseInt($('settingTrialDays').value, 10) || 1,
+      trial_prefix: $('settingTrialPrefix').value.trim() || 'trial',
+    });
+  });
+
+  // ---------------- retention ----------------
+  async function loadCleanupStatus() {
+    try {
+      const r = await PEYK.api('/api/cleanup');
+      const badge = $('cleanupBadge');
+      badge.textContent = PEYK.t(r.enabled ? 'cleanup_on' : 'cleanup_off');
+      badge.className = 'pill ' + (r.enabled ? 'pill-on' : 'pill-muted');
+      $('cleanupLast').textContent = r.last
+        ? `${PEYK.t('cleanup_last')}: ` +
+          new Date(r.last.ts * 1000).toLocaleString(PEYK.getLang() === 'fa' ? 'fa-IR' : 'en-US')
+        : PEYK.t('cleanup_never_run');
+      renderCleanupPreview(r);
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function renderCleanupPreview(r) {
+    const box = $('cleanupPreview');
+    const dis = r.would_disable || [];
+    const del = r.would_delete || [];
+    if (!dis.length && !del.length) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    const names = list => list.slice(0, 6).map(u => esc(u.name || u.uid)).join('، ')
+      + (list.length > 6 ? ` … +${list.length - 6}` : '');
+    const parts = [];
+    if (dis.length) parts.push(`<b>${dis.length}</b> ${esc(PEYK.t('cleanup_would_disable'))}: ${names(dis)}`);
+    if (del.length) parts.push(`<b>${del.length}</b> ${esc(PEYK.t('cleanup_would_delete'))}: ${names(del)}`);
+    box.innerHTML = parts.join('<br>');
+  }
+
+  $('saveCleanupBtn').addEventListener('click', () => {
+    saveSettings('saveCleanupBtn', {
+      cleanup_enabled: $('settingCleanup').checked,
+      cleanup_disable_days: parseInt($('settingCleanupDisable').value, 10) || 0,
+      cleanup_delete_days: parseInt($('settingCleanupDelete').value, 10) || 0,
+    }, loadCleanupStatus);
+  });
+
+  $('cleanupPreviewBtn').addEventListener('click', async () => {
+    const btn = $('cleanupPreviewBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/cleanup');
+      renderCleanupPreview(r);
+      const n = (r.would_disable || []).length + (r.would_delete || []).length;
+      if (!n) PEYK.toast(PEYK.t('cleanup_nothing'), 'success');
+    } catch (e) { PEYK.toast(e.detail || 'error', 'error'); }
+    finally { PEYK.setLoading(btn, false); }
+  });
+
+  $('cleanupRunBtn').addEventListener('click', async () => {
+    if (!confirm(PEYK.t('cleanup_run_confirm'))) return;
+    const btn = $('cleanupRunBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/cleanup', { method: 'POST' });
+      PEYK.toast(PEYK.t('cleanup_done')
+        .replace('{disabled}', r.disabled).replace('{deleted}', r.deleted), 'success');
+      loadCleanupStatus();
+      loadInbounds();
+    } catch (e) { PEYK.toast(e.detail || 'error', 'error'); }
+    finally { PEYK.setLoading(btn, false); }
   });
 
   // ---------------- telegram backup ----------------
