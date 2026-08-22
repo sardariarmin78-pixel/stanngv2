@@ -48,6 +48,8 @@
     check('settingNotifyQuota', s.notify_quota_enabled !== false);
     set('settingNotifyPercent', s.notify_quota_percent != null ? s.notify_quota_percent : 80);
     check('settingNotifyExpiry', s.notify_expiry_enabled !== false);
+    check('settingRenewEnabled', !!s.userbot_renew_enabled);
+    set('settingRenewOptions', (s.userbot_renew_options || [30, 60, 90]).join(','));
     check('settingAutoBackup', !!s.auto_backup_enabled);
     check('settingCleanup', !!s.cleanup_enabled);
     set('settingCleanupDisable', s.cleanup_disable_days != null ? s.cleanup_disable_days : 3);
@@ -86,6 +88,7 @@
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security') { loadTwofaStatus(); loadLoginLog(); }
     if (name === 'settings') { loadBackupStatus(); loadCleanupStatus(); }
+    if (name === 'notifications') loadRenewRequests(false);
     if (name === 'notifications') loadUserbotStatus();
     closeSidebarMobile();
     PEYK.playSfx('open', 0.25);
@@ -1334,6 +1337,54 @@
     } catch (e) { PEYK.toast(e.detail || 'error', 'error'); }
     finally { PEYK.setLoading(btn, false); }
   });
+
+  // ---------------- renewal requests ----------------
+  async function loadRenewRequests(show) {
+    try {
+      const r = await PEYK.api('/api/userbot/requests');
+      const badge = $('rnBadge');
+      const on = $('settingRenewEnabled').checked;
+      badge.textContent = PEYK.t(on ? 'rn_on' : 'rn_off');
+      badge.className = 'pill ' + (on ? 'pill-on' : 'pill-muted');
+      $('rnPending').textContent = r.pending
+        ? PEYK.t('rn_pending').replace('{n}', r.pending)
+        : PEYK.t('rn_none');
+
+      if (!show) return;
+      const rows = r.requests || [];
+      $('rnTableWrap').style.display = rows.length ? '' : 'none';
+      const tbody = $('rnTableBody');
+      tbody.innerHTML = '';
+      const pill = st => st === 'approved'
+        ? `<span class="pill pill-on">${esc(PEYK.t('rn_approved'))}</span>`
+        : st === 'rejected'
+          ? `<span class="pill pill-off">${esc(PEYK.t('rn_rejected'))}</span>`
+          : `<span class="pill pill-warn">${esc(PEYK.t('rn_waiting'))}</span>`;
+      rows.forEach(q => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td data-label="${esc(PEYK.t('inb_name'))}"><b>${esc(q.name || q.uid)}</b></td>
+          <td data-label="${esc(PEYK.t('loginlog_time'))}" class="small">${esc(
+            new Date((q.created_at || 0) * 1000)
+              .toLocaleString(PEYK.getLang() === 'fa' ? 'fa-IR' : 'en-US'))}</td>
+          <td data-label="${esc(PEYK.t('inb_status'))}">${pill(q.status)}</td>`;
+        tbody.appendChild(tr);
+      });
+      if (!rows.length) PEYK.toast(PEYK.t('rn_none'), 'info', 2000);
+    } catch (e) { /* non-fatal */ }
+  }
+
+  $('saveRenewBtn').addEventListener('click', () => {
+    const days = $('settingRenewOptions').value
+      .split(',').map(x => parseInt(x.trim(), 10)).filter(n => n > 0);
+    if (!days.length) { PEYK.toast(PEYK.t('rn_options_bad'), 'error'); return; }
+    saveSettings('saveRenewBtn', {
+      userbot_renew_enabled: $('settingRenewEnabled').checked,
+      userbot_renew_options: days,
+    }, () => loadRenewRequests(false));
+  });
+
+  $('rnRefreshBtn').addEventListener('click', () => loadRenewRequests(true));
 
   // ---------------- telegram backup ----------------
   async function loadBackupStatus() {

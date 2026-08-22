@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 9  # v9: retention, trials, fragment profiles
+SCHEMA_VERSION = 10  # v10: renewal requests from the bot
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -107,6 +107,10 @@ DEFAULT_DB: Dict[str, Any] = {
         # ---- self-service bot for end users ----
         "userbot_enabled": False,
         "userbot_token": "",
+        # Users may ask for a renewal from the bot; the admin approves with a
+        # button. Off by default because it messages the admin.
+        "userbot_renew_enabled": False,
+        "userbot_renew_options": [30, 60, 90],
         # ---- retention: expired accounts otherwise pile up forever ----
         "cleanup_enabled": False,
         "cleanup_disable_days": 3,   # days past expiry before disabling
@@ -132,6 +136,7 @@ DEFAULT_DB: Dict[str, Any] = {
     "bot_bindings": {},   # telegram chat id -> inbound uid
     "bot_offset": 0,      # last consumed getUpdates id
     "last_cleanup": None, # {"ts": float, "disabled": int, "deleted": int}
+    "renew_requests": {}, # request id -> {uid, chat, name, created_at, status}
     "stats": {
         "started_at": time.time(),
         "total_up": 0,
@@ -282,6 +287,9 @@ def normalize_db(db: Dict[str, Any]) -> bool:
         changed = True
     if not isinstance(db.get("bot_bindings"), dict):
         db["bot_bindings"] = {}
+        changed = True
+    if not isinstance(db.get("renew_requests"), dict):
+        db["renew_requests"] = {}
         changed = True
     if not isinstance(db.get("bot_offset"), int):
         db["bot_offset"] = 0

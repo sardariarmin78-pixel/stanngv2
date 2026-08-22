@@ -29,12 +29,15 @@ def client():
 class Ctx:
     """Stands in for the panel side of the bot."""
 
-    def __init__(self, users=None, origin="https://panel.example.com"):
+    def __init__(self, users=None, origin="https://panel.example.com",
+                 renew_enabled=True):
         self.users = users or {}
         self.bindings = {}
         self.binds = {}
         self.origin = origin
         self.panel_name = "Peyk"
+        self.renew_enabled = renew_enabled
+        self.requests = {}
 
     def lookup(self, uid):
         return self.users.get(uid)
@@ -50,6 +53,12 @@ class Ctx:
         if not self.origin:
             return "", []
         return f"{self.origin}/sub/{uid}", [{"link": f"vless://x@h:443#{uid}"}]
+
+    def has_open_request(self, chat):
+        return str(chat) in self.requests
+
+    def request_renew(self, chat, uid, found):
+        self.requests[str(chat)] = {"uid": uid, "found": found}
 
 
 def user(name="Ali", **status):
@@ -143,12 +152,54 @@ async def test_bot_exposes_no_mutating_commands(anyio_backend):
     """A leaked bot token must not become a leaked panel."""
     ctx = Ctx({"abc123": user()})
     await reply("/bind abc123", ctx)
-    for attempt in ("/delete", "/renew 30", "/reset", "/disable", "/adduser x",
-                    "/setquota 999", "/admin"):
+    for attempt in ("/delete", "/reset", "/disable", "/adduser x",
+                    "/setquota 999", "/admin", "/extend 30"):
         out = await reply(attempt, ctx)
         assert "ناشناخته" in out, f"{attempt} was not rejected"
     # nothing was recorded beyond the original binding
     assert ctx.binds == {"555": "abc123"}
+
+
+@pytest.mark.anyio
+async def test_renew_only_asks_it_cannot_grant(anyio_backend):
+    """/renew is the one command that reaches the admin, and it still changes
+    nothing on its own — it records a request the admin has to approve."""
+    ctx = Ctx({"abc123": user("Ali")})
+    await reply("/bind abc123", ctx)
+    before = dict(ctx.users["abc123"]["status"])
+
+    out = await reply("/renew", ctx)
+    assert "ارسال شد" in out
+    assert ctx.requests["555"]["uid"] == "abc123"
+    # the subscription itself is untouched
+    assert ctx.users["abc123"]["status"] == before
+
+
+@pytest.mark.anyio
+async def test_renew_requires_a_binding(anyio_backend):
+    ctx = Ctx({"abc123": user()})
+    assert "bind" in (await reply("/renew", ctx)).lower()
+    assert ctx.requests == {}
+
+
+@pytest.mark.anyio
+async def test_renew_can_be_turned_off(anyio_backend):
+    ctx = Ctx({"abc123": user()}, renew_enabled=False)
+    await reply("/bind abc123", ctx)
+    out = await reply("/renew", ctx)
+    assert "فعال نیست" in out
+    assert ctx.requests == {}
+
+
+@pytest.mark.anyio
+async def test_second_renew_request_is_refused(anyio_backend):
+    """Otherwise a user tapping repeatedly floods the admin with duplicates."""
+    ctx = Ctx({"abc123": user()})
+    await reply("/bind abc123", ctx)
+    await reply("/renew", ctx)
+    out = await reply("/renew", ctx)
+    assert "بررسی نشده" in out
+    assert len(ctx.requests) == 1
 
 
 @pytest.mark.anyio

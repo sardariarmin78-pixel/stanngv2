@@ -810,6 +810,9 @@ class _BotContext:
         self.origin = request_origin
         self.panel_name = brand(db)["panel_name"]
         self._pending_binds = {}
+        self._pending_requests = {}
+        settings = db.get("settings") or {}
+        self.renew_enabled = bool(settings.get("userbot_renew_enabled"))
 
     def lookup(self, uid: str):
         ib = inbound_by_uid(self.db, uid)
@@ -830,9 +833,29 @@ class _BotContext:
         configs = build_configs_for_origin(self.db, ib, self.origin)
         return f"{self.origin}/sub/{uid}", configs
 
+    def has_open_request(self, chat) -> bool:
+        """One open ask per chat, so tapping /renew repeatedly cannot spam."""
+        chat = str(chat)
+        for req in (self.db.get("renew_requests") or {}).values():
+            if str(req.get("chat")) == chat and req.get("status") == "pending":
+                return True
+        return chat in self._pending_requests
+
+    def request_renew(self, chat, uid: str, found: dict):
+        self._pending_requests[str(chat)] = {
+            "uid": uid,
+            "chat": chat,
+            "name": (found.get("inbound") or {}).get("name", ""),
+            "status": found.get("status") or {},
+        }
+
     @property
     def pending_binds(self):
         return self._pending_binds
+
+    @property
+    def pending_requests(self):
+        return self._pending_requests
 
 
 def _bot_origin(db) -> str:
@@ -881,8 +904,15 @@ async def _userbot_loop():
             replies = []
             highest = offset
 
+            callbacks = []
             for update in updates:
                 highest = max(highest, int(update.get("update_id", 0)) + 1)
+
+                callback = update.get("callback_query")
+                if callback:
+                    callbacks.append(callback)
+                    continue
+
                 message = update.get("message") or {}
                 chat = (message.get("chat") or {}).get("id")
                 if chat is None:
@@ -896,14 +926,33 @@ async def _userbot_loop():
                 if reply:
                     replies.append((chat, reply))
 
+            new_requests = dict(ctx.pending_requests)
+
             def _apply(db):
                 db["bot_offset"] = highest
                 if ctx.pending_binds:
                     bindings = db.setdefault("bot_bindings", {})
                     bindings.update(ctx.pending_binds)
                     userbot.prune_bindings(bindings)
+                if new_requests:
+                    store_reqs = db.setdefault("renew_requests", {})
+                    for chat_key, req in new_requests.items():
+                        rid = gen_uid()[:8]
+                        store_reqs[rid] = {
+                            "uid": req["uid"], "chat": req["chat"],
+                            "name": req["name"], "created_at": time.time(),
+                            "status": "pending", "admin_message_id": None,
+                        }
+                        req["request_id"] = rid
+                    userbot.prune_requests(store_reqs)
 
-            await store.mutate(_apply, persist=bool(ctx.pending_binds))
+            await store.mutate(
+                _apply, persist=bool(ctx.pending_binds or new_requests))
+
+            for req in new_requests.values():
+                await _dispatch_renew_request(req)
+            for callback in callbacks:
+                await _handle_renew_callback(callback)
 
             for chat, text in replies:
                 try:
@@ -1011,6 +1060,146 @@ async def _cleanup_loop():
             break
         except Exception:
             await asyncio.sleep(120)
+
+
+def _renew_options(db) -> list:
+    raw = (db.get("settings") or {}).get("userbot_renew_options") or [30, 60, 90]
+    out = []
+    for value in raw if isinstance(raw, list) else []:
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= days <= 3650:
+            out.append(days)
+    return out[:4] or [30, 60, 90]
+
+
+async def _dispatch_renew_request(req: dict):
+    """Send the admin a message with approve/reject buttons."""
+    rid = req.get("request_id")
+    if not rid:
+        return
+    db = await store.get()
+    admin_token, admin_chat, _ = _notify_config(db)
+    if not admin_token:
+        return
+    text = userbot.format_renew_request(
+        brand(db)["panel_name"], req.get("name", ""), req.get("status") or {})
+    keyboard = userbot.renew_keyboard(rid, _renew_options(db))
+    try:
+        sent = await userbot.send_with_buttons(admin_token, admin_chat, text, keyboard)
+    except userbot.UserBotError:
+        return
+
+    # Remember which message carries the buttons so it can be rewritten once
+    # a decision is made, rather than leaving a tappable stale keyboard.
+    message_id = sent.get("message_id")
+
+    def _apply(db):
+        entry = (db.get("renew_requests") or {}).get(rid)
+        if entry:
+            entry["admin_message_id"] = message_id
+
+    await store.mutate(_apply, persist=False)
+
+
+async def _handle_renew_callback(callback: dict):
+    """Apply the admin's decision on a renewal request."""
+    db = await store.get()
+    admin_token, admin_chat, _ = _notify_config(db)
+    if not admin_token:
+        return
+
+    callback_id = callback.get("id")
+    data = callback.get("data") or ""
+    from_chat = ((callback.get("message") or {}).get("chat") or {}).get("id")
+
+    async def ack(text):
+        try:
+            await userbot.answer_callback(admin_token, callback_id, text)
+        except userbot.UserBotError:
+            pass
+
+    # The keyboard only ever goes to the admin chat, but verify rather than
+    # assume: acting on a button tapped anywhere else would let a user
+    # approve their own renewal.
+    if str(from_chat) != str(admin_chat):
+        await ack("")
+        return
+
+    action, rid, days = userbot.parse_callback(data)
+    if action != "rn":
+        await ack("")
+        return
+
+    entry = (db.get("renew_requests") or {}).get(rid)
+    if not entry or entry.get("status") != "pending":
+        await ack("این درخواست قبلاً بررسی شده است.")
+        return
+
+    uid = entry.get("uid")
+    ib = inbound_by_uid(db, uid)
+    if not ib:
+        def _gone(db):
+            req = (db.get("renew_requests") or {}).get(rid)
+            if req:
+                req["status"] = "rejected"
+        await store.mutate(_gone, persist=False)
+        await ack("این اشتراک دیگر وجود ندارد.")
+        return
+
+    panel = brand(db)["panel_name"]
+    name = ib.get("name", "")
+
+    if days is None:
+        def _reject(db):
+            req = (db.get("renew_requests") or {}).get(rid)
+            if req:
+                req["status"] = "rejected"
+        await store.mutate(_reject)
+        admin_text = f"❌ درخواست تمدید <b>{userbot._escape(name)}</b> رد شد."
+        user_text = (f"<b>{userbot._escape(panel)}</b>\n\n"
+                     "متأسفانه درخواست تمدید شما تأیید نشد. با پشتیبانی تماس بگیرید.")
+        await ack("رد شد")
+    else:
+        def _approve(db):
+            target = inbound_by_uid(db, uid)
+            if target:
+                base = max(time.time(), target.get("expire_at") or 0)
+                target["expire_at"] = base + days * 86400
+                target["expire_days"] = int(
+                    (target["expire_at"] - target.get("created_at", time.time())) // 86400)
+                target["used_up"] = 0
+                target["used_down"] = 0
+                target["request_count"] = 0
+                target["enabled"] = True
+            req = (db.get("renew_requests") or {}).get(rid)
+            if req:
+                req["status"] = "approved"
+                req["days"] = days
+        runtime["pending_traffic"].pop(uid, None)
+        runtime["pending_requests"].pop(uid, None)
+        await store.mutate(_approve)
+        admin_text = (f"✅ <b>{userbot._escape(name)}</b> برای "
+                      f"<b>{days}</b> روز تمدید شد و حجم مصرفی ریست شد.")
+        user_text = (f"<b>{userbot._escape(panel)}</b>\n\n"
+                     f"✅ اشتراک شما <b>{days}</b> روز تمدید شد و حجم مصرفی از نو شروع شد.")
+        await ack("تمدید شد")
+
+    message_id = entry.get("admin_message_id") or (callback.get("message") or {}).get("message_id")
+    if message_id:
+        try:
+            await userbot.edit_message(admin_token, admin_chat, message_id, admin_text)
+        except userbot.UserBotError:
+            pass
+
+    user_token = ((db.get("settings") or {}).get("userbot_token") or "").strip()
+    if user_token and entry.get("chat"):
+        try:
+            await userbot.send(user_token, entry["chat"], user_text)
+        except userbot.UserBotError:
+            pass
 
 
 async def _keep_alive_loop():
@@ -1294,6 +1483,7 @@ BOOL_SETTINGS = {
     "keep_alive", "fragment_enabled", "allow_private_destinations",
     "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
     "auto_backup_enabled", "userbot_enabled", "cleanup_enabled", "trial_enabled",
+    "userbot_renew_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
@@ -1358,6 +1548,22 @@ async def api_update_settings(request: Request, user: str = Depends(require_auth
         if payload["fragment_profile"] not in fragments.PROFILES:
             raise HTTPException(400, "invalid-fragment_profile")
         clean["fragment_profile"] = payload["fragment_profile"]
+
+    if "userbot_renew_options" in payload:
+        raw = payload["userbot_renew_options"]
+        if not isinstance(raw, list):
+            raise HTTPException(400, "invalid-userbot_renew_options")
+        options = []
+        for value in raw:
+            try:
+                days = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= days <= 3650:
+                options.append(days)
+        if not options:
+            raise HTTPException(400, "invalid-userbot_renew_options")
+        clean["userbot_renew_options"] = options[:4]
 
     if "trial_gb" in payload:
         clean["trial_gb"] = _as_number(payload["trial_gb"], "trial_gb", 0, 1000, False)
@@ -2503,6 +2709,18 @@ async def api_userbot_status(user: str = Depends(require_auth)):
         "bound_users": len(db.get("bot_bindings") or {}),
         "public_domain_set": bool(_bot_origin(db)),
     }
+
+
+@app.get("/api/userbot/requests")
+async def api_renew_requests(user: str = Depends(require_auth)):
+    db = await store.get()
+    requests = db.get("renew_requests") or {}
+    rows = []
+    for rid, req in requests.items():
+        rows.append({"id": rid, **{k: v for k, v in req.items() if k != "admin_message_id"}})
+    rows.sort(key=lambda r: r.get("created_at", 0), reverse=True)
+    return {"requests": rows[:100],
+            "pending": sum(1 for r in rows if r.get("status") == "pending")}
 
 
 @app.post("/api/userbot/test")
