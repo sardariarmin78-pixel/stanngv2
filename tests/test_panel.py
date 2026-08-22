@@ -221,7 +221,8 @@ def test_fragment_settings_reach_the_link(client):
     """fragment_* were stored and displayed but never used when building links."""
     ib = _make(client)
     client.post("/api/settings", json={
-        "fragment_enabled": True, "fragment_packets": "tlshello",
+        "fragment_enabled": True, "fragment_profile": "custom",
+        "fragment_packets": "tlshello",
         "fragment_length": "40-60", "fragment_interval": "5-10",
     })
     tls = client.get(f"/api/inbounds/{ib['uid']}/links").json()["links"]["tls"]
@@ -230,6 +231,8 @@ def test_fragment_settings_reach_the_link(client):
     client.post("/api/settings", json={"fragment_enabled": False})
     tls = client.get(f"/api/inbounds/{ib['uid']}/links").json()["links"]["tls"]
     assert "fragment=" not in tls
+    client.post("/api/settings", json={"fragment_enabled": True,
+                                       "fragment_profile": "balanced"})
 
 
 def test_public_status_reports_reason(client):

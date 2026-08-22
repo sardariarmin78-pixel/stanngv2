@@ -151,6 +151,7 @@
                 <option value="expiring" data-i18n="filter_expiring">رو به انقضا</option>
               </select>
               <button class="btn btn-sm" id="bulkCreateBtn"><svg><use href="#icon-layers"/></svg><span data-i18n="inb_bulk_create">ساخت گروهی</span></button>
+              <button class="btn btn-sm" id="trialBtn" title="" data-i18n-title="trial_new"><svg><use href="#icon-bolt"/></svg><span data-i18n="trial_new">اکانت تست</span></button>
               <button class="btn btn-primary btn-sm" id="addInboundBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="inb_add">کاربر جدید</span></button>
             </div>
           </div>
@@ -549,6 +550,11 @@
                 </div>
                 <label class="switch"><input type="checkbox" id="settingFragmentEnabled" checked><span class="track"><span class="thumb"></span></span></label>
               </div>
+              <div class="field">
+                <label data-i18n="frag_profile">پروفایل فرگمنت</label>
+                <select class="input" id="settingFragmentProfile"></select>
+                <div class="small muted mt-8" id="fragmentProfileNote"></div>
+              </div>
               <div class="form-grid" id="fragmentFields">
                 <div class="field">
                   <label data-i18n="settings_fragment_packets">Packets</label>
@@ -587,6 +593,66 @@
                 <input class="input" type="number" id="settingHistoryDays" min="1" max="90" step="1" placeholder="30" style="direction:ltr;">
               </div>
               <button class="btn btn-primary btn-sm" id="saveRelayBtn"><span data-i18n="save">ذخیره</span></button>
+            </div>
+          </div>
+
+          <div class="col-6 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-trash"/></svg><span data-i18n="cleanup_title">پاک‌سازی خودکار</span></h3>
+              <span class="pill pill-muted" id="cleanupBadge" data-i18n="cleanup_off">خاموش</span>
+            </div>
+            <div class="win-body">
+              <div class="small muted mb-16" data-i18n="cleanup_hint">کاربران منقضی بعد از مهلت مشخص غیرفعال و در نهایت حذف می‌شوند. اکانت‌های بدون تاریخ انقضا هرگز پاک نمی‌شوند.</div>
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="cleanup_enable">فعال باشد</div>
+                  <div class="hint" id="cleanupLast">—</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingCleanup"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label data-i18n="cleanup_disable_days">غیرفعال بعد از (روز)</label>
+                  <input class="input" type="number" id="settingCleanupDisable" min="0" max="365" step="1" placeholder="3" style="direction:ltr;">
+                </div>
+                <div class="field">
+                  <label data-i18n="cleanup_delete_days">حذف بعد از (روز)</label>
+                  <input class="input" type="number" id="settingCleanupDelete" min="0" max="3650" step="1" placeholder="30" style="direction:ltr;">
+                  <div class="small muted mt-8" data-i18n="cleanup_never">۰ یعنی هرگز حذف نشود</div>
+                </div>
+              </div>
+              <div class="inline-error show" id="cleanupPreview" style="display:none; border-color:var(--warn); background:var(--warn-dim); color:var(--warn);"></div>
+              <div class="flex gap-8 flex-wrap mt-12">
+                <button class="btn btn-primary btn-sm" id="saveCleanupBtn"><span data-i18n="save">ذخیره</span></button>
+                <button class="btn btn-sm" id="cleanupPreviewBtn"><span data-i18n="cleanup_preview">بررسی</span></button>
+                <button class="btn btn-sm btn-danger" id="cleanupRunBtn"><span data-i18n="cleanup_run">اجرای الان</span></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-bolt"/></svg><span data-i18n="trial_title">اکانت تست</span></h3></div>
+            <div class="win-body">
+              <div class="small muted mb-16" data-i18n="trial_hint">با دکمه «اکانت تست» در صفحه کاربران، یک اشتراک با این مشخصات ساخته می‌شود. اکانت‌های تست یک روز بعد از انقضا خودکار حذف می‌شوند.</div>
+              <div class="setting-row">
+                <div class="title" data-i18n="trial_enable">فعال باشد</div>
+                <label class="switch"><input type="checkbox" id="settingTrialEnabled" checked><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label data-i18n="inb_quota">حجم (GB)</label>
+                  <input class="input" type="number" id="settingTrialGb" min="0" step="0.1" placeholder="1" style="direction:ltr;">
+                </div>
+                <div class="field">
+                  <label data-i18n="inb_expire">مدت (روز)</label>
+                  <input class="input" type="number" id="settingTrialDays" min="1" max="30" step="1" placeholder="1" style="direction:ltr;">
+                </div>
+                <div class="field span-2">
+                  <label data-i18n="bulk_prefix">پیشوند نام</label>
+                  <input class="input" type="text" id="settingTrialPrefix" maxlength="40" placeholder="trial" style="direction:ltr;">
+                </div>
+              </div>
+              <button class="btn btn-primary btn-sm" id="saveTrialBtn"><span data-i18n="save">ذخیره</span></button>
             </div>
           </div>
 

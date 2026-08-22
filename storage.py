@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 8  # v8: user-facing telegram bot
+SCHEMA_VERSION = 9  # v9: retention, trials, fragment profiles
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -107,6 +107,17 @@ DEFAULT_DB: Dict[str, Any] = {
         # ---- self-service bot for end users ----
         "userbot_enabled": False,
         "userbot_token": "",
+        # ---- retention: expired accounts otherwise pile up forever ----
+        "cleanup_enabled": False,
+        "cleanup_disable_days": 3,   # days past expiry before disabling
+        "cleanup_delete_days": 30,   # days past expiry before deleting (0 = never)
+        # ---- one-click trial accounts ----
+        "trial_enabled": True,
+        "trial_gb": 1.0,
+        "trial_days": 1,
+        "trial_prefix": "trial",
+        # ---- DPI fragmentation profile applied to generated links ----
+        "fragment_profile": "balanced",
     },
     "inbounds": [],       # list of inbound/user dicts
     "plans": [],          # reusable presets: {id, name, days, quota_gb, max_connections, max_requests}
@@ -120,6 +131,7 @@ DEFAULT_DB: Dict[str, Any] = {
     "last_backup": None,  # {"ts": float, "ok": bool, "detail": str}
     "bot_bindings": {},   # telegram chat id -> inbound uid
     "bot_offset": 0,      # last consumed getUpdates id
+    "last_cleanup": None, # {"ts": float, "disabled": int, "deleted": int}
     "stats": {
         "started_at": time.time(),
         "total_up": 0,
@@ -206,6 +218,16 @@ def normalize_db(db: Dict[str, Any]) -> bool:
             changed = True
 
     if isinstance(db.get("settings"), dict):
+        # Migration: before profiles existed the typed fragment values were
+        # always used. Defaulting an upgraded install to "balanced" would
+        # silently discard whatever the admin had tuned, so it starts on
+        # "custom" instead — which keeps using exactly those values.
+        if "fragment_profile" not in db["settings"] and any(
+                k in db["settings"] for k in
+                ("fragment_packets", "fragment_length", "fragment_interval")):
+            db["settings"]["fragment_profile"] = "custom"
+            changed = True
+
         for k, v in DEFAULT_DB["settings"].items():
             if k not in db["settings"]:
                 db["settings"][k] = v
