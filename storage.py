@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 11  # v11: rotatable subscription tokens, health checks
+SCHEMA_VERSION = 12  # v12: reseller sub-admins
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -130,6 +130,9 @@ DEFAULT_DB: Dict[str, Any] = {
     },
     "inbounds": [],       # list of inbound/user dicts
     "plans": [],          # reusable presets: {id, name, days, quota_gb, max_connections, max_requests}
+    # Sub-admins. The owner stays in "admin"; these are scoped logins that
+    # only ever see the users they created.
+    "resellers": [],      # {id, username, password_hash, salt, enabled, max_users, max_traffic_gb, note}
     # Entry points a client can reach this backend through. Several hostnames
     # or clean CDN IPs in front of one deployment already behave as separate
     # routes, which is what matters against per-IP blocking. `node_url` is
@@ -272,6 +275,15 @@ def normalize_db(db: Dict[str, Any]) -> bool:
     if not isinstance(db.get("plans"), list):
         db["plans"] = []
         changed = True
+    if not isinstance(db.get("resellers"), list):
+        db["resellers"] = []
+        changed = True
+    else:
+        kept_r = [r for r in db["resellers"]
+                  if isinstance(r, dict) and r.get("id") and r.get("username")]
+        if len(kept_r) != len(db["resellers"]):
+            db["resellers"] = kept_r
+            changed = True
     if not isinstance(db.get("endpoints"), list):
         db["endpoints"] = []
         changed = True
@@ -339,6 +351,11 @@ def normalize_db(db: Dict[str, Any]) -> bool:
         # WebSocket path. Existing installs therefore start with the token
         # equal to the uid so no link breaks; rotating it later kills the old
         # URL without touching the client's working config.
+        # None means the owner created it. Existing users all predate
+        # resellers, so they belong to the owner.
+        if "owner" not in ib:
+            ib["owner"] = None
+            changed = True
         if not ib.get("sub_token"):
             ib["sub_token"] = ib["uid"]
             changed = True

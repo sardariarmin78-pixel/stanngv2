@@ -52,7 +52,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "2.0.0"
+APP_VERSION = "3.0.0"
 
 
 def _env_raw(name: str):
@@ -315,7 +315,61 @@ def _session_fingerprint(db) -> str:
     return f"{admin.get('password_hash', '')[:12]}:{db.get('sessions_epoch', 0)}"
 
 
-async def current_username(request: Request) -> Optional[str]:
+class Identity:
+    """Who is making a request, and what they are allowed to reach.
+
+    The owner is the account created at /setup and is unrestricted. A reseller
+    is a scoped login that only ever sees the users it created, and is refused
+    everything that configures the panel itself.
+
+    Stringifies to the username so the many endpoints that only ever needed a
+    name keep working unchanged.
+    """
+
+    __slots__ = ("username", "role", "id", "record")
+
+    def __init__(self, username: str, role: str = "owner",
+                 reseller_id: Optional[str] = None, record: Optional[dict] = None):
+        self.username = username
+        self.role = role
+        self.id = reseller_id
+        self.record = record or {}
+
+    @property
+    def is_owner(self) -> bool:
+        return self.role == "owner"
+
+    def owns(self, ib: dict) -> bool:
+        """The owner sees everything; a reseller only its own rows."""
+        if self.is_owner:
+            return True
+        return ib.get("owner") == self.id
+
+    def __str__(self) -> str:
+        return self.username
+
+    def __eq__(self, other):
+        return str(other) == self.username if isinstance(other, str) else NotImplemented
+
+    def __hash__(self):
+        return hash(self.username)
+
+
+def reseller_by_username(db, username: str) -> Optional[dict]:
+    for r in db.get("resellers", []):
+        if r.get("username") == username:
+            return r
+    return None
+
+
+def reseller_by_id(db, reseller_id: str) -> Optional[dict]:
+    for r in db.get("resellers", []):
+        if r.get("id") == reseller_id:
+            return r
+    return None
+
+
+async def current_identity(request: Request) -> Optional["Identity"]:
     db = await store.get()
     if not db.get("admin"):
         return None
@@ -326,19 +380,52 @@ async def current_username(request: Request) -> Optional[str]:
         data = get_serializer(db).loads(token, max_age=SESSION_MAX_AGE)
     except (BadSignature, SignatureExpired):
         return None
+
+    role = data.get("r") or "owner"
+    if role == "reseller":
+        record = reseller_by_id(db, data.get("i"))
+        # A disabled or deleted reseller loses every live session at once.
+        if not record or not record.get("enabled", True):
+            return None
+        if data.get("v") != _reseller_fingerprint(db, record):
+            return None
+        return Identity(record["username"], "reseller", record["id"], record)
+
     admin = db["admin"]
     if data.get("u") != admin.get("username"):
         return None
     if data.get("v") != _session_fingerprint(db):
         return None
-    return admin["username"]
+    return Identity(admin["username"], "owner")
 
 
-async def require_auth(request: Request) -> str:
-    user = await current_username(request)
-    if not user:
+def _reseller_fingerprint(db, record: dict) -> str:
+    """Changing a reseller's password invalidates their cookies."""
+    return f"{record.get('password_hash', '')[:12]}:{db.get('sessions_epoch', 0)}"
+
+
+async def current_username(request: Request) -> Optional[str]:
+    identity = await current_identity(request)
+    return identity.username if identity else None
+
+
+async def require_auth(request: Request) -> Identity:
+    identity = await current_identity(request)
+    if not identity:
         raise HTTPException(status_code=401, detail="unauthorized")
-    return user
+    return identity
+
+
+async def require_owner(request: Request) -> Identity:
+    """For everything that configures the panel rather than its users.
+
+    Resellers get 403 rather than 401: they are authenticated, just not
+    permitted, and conflating the two makes the UI reload into a login loop.
+    """
+    identity = await require_auth(request)
+    if not identity.is_owner:
+        raise HTTPException(status_code=403, detail="owner-only")
+    return identity
 
 
 def get_scheme(request: Request) -> str:
@@ -351,8 +438,14 @@ def get_scheme(request: Request) -> str:
     return "https"
 
 
-def set_session_cookie(response: Response, request: Request, db, username: str):
-    token = get_serializer(db).dumps({"u": username, "v": _session_fingerprint(db)})
+def set_session_cookie(response: Response, request: Request, db, username: str,
+                       reseller: Optional[dict] = None):
+    if reseller:
+        payload = {"u": username, "r": "reseller", "i": reseller["id"],
+                   "v": _reseller_fingerprint(db, reseller)}
+    else:
+        payload = {"u": username, "r": "owner", "v": _session_fingerprint(db)}
+    token = get_serializer(db).dumps(payload)
     response.set_cookie(
         SESSION_COOKIE, token,
         max_age=SESSION_MAX_AGE, httponly=True,
@@ -1496,17 +1589,29 @@ async def api_login(request: Request):
         raise HTTPException(429, f"locked:{int(locked_until - time.time())}")
 
     admin = db.get("admin")
-    if admin:
+    reseller = reseller_by_username(db, username) if username else None
+
+    if reseller and reseller.get("enabled", True):
+        ok = await verify_password_async(password, reseller["salt"], reseller["password_hash"])
+    elif admin:
         # Always run the KDF, even for an unknown username, so response time
         # doesn't reveal whether the account exists.
         password_ok = await verify_password_async(password, admin["salt"], admin["password_hash"])
         ok = secrets.compare_digest(admin["username"], username) and password_ok
+        reseller = None
     else:
         await verify_password_async(password, "dummy-salt", "0" * 64)
         ok = False
+        reseller = None
+    if reseller and not reseller.get("enabled", True):
+        # Same KDF cost as a real check, so a disabled account is not
+        # distinguishable by timing.
+        await verify_password_async(password, reseller["salt"], reseller["password_hash"])
+        ok = False
 
     twofa = db.get("twofa") or {}
-    needs_2fa = ok and bool(twofa.get("enabled")) and bool(twofa.get("secret"))
+    needs_2fa = (ok and not reseller
+                 and bool(twofa.get("enabled")) and bool(twofa.get("secret")))
     method = "password"
     used_recovery = None
 
@@ -1549,9 +1654,13 @@ async def api_login(request: Request):
     if not ok:
         raise HTTPException(401, "invalid-credentials")
 
-    resp = JSONResponse({"ok": True, "recovery_remaining": len(
-        (db.get("twofa") or {}).get("recovery_hashes") or [])})
-    set_session_cookie(resp, request, db, username)
+    resp = JSONResponse({
+        "ok": True,
+        "role": "reseller" if reseller else "owner",
+        "recovery_remaining": len((db.get("twofa") or {}).get("recovery_hashes") or []),
+    })
+    set_session_cookie(resp, request, db, username,
+                       reseller=reseller_by_username(db, username) if reseller else None)
     return resp
 
 
@@ -1563,7 +1672,7 @@ async def api_logout():
 
 
 @app.post("/api/logout-all")
-async def api_logout_all(user: str = Depends(require_auth)):
+async def api_logout_all(user: Identity = Depends(require_owner)):
     """Invalidate every session cookie ever issued, on every device."""
     def _apply(db):
         db["sessions_epoch"] = db.get("sessions_epoch", 0) + 1
@@ -1576,27 +1685,55 @@ async def api_logout_all(user: str = Depends(require_auth)):
 
 @app.get("/api/me")
 async def api_me(request: Request):
-    user = await current_username(request)
+    identity = await current_identity(request)
     db = await store.get()
-    settings = dict(db.get("settings", {}))
-    return {
-        "logged_in": bool(user),
-        "username": user,
-        "settings": settings if user else {},
+    body = {
+        "logged_in": bool(identity),
+        "username": identity.username if identity else None,
+        "role": identity.role if identity else None,
         "app_version": APP_VERSION,
         **brand(db),
     }
+    if not identity:
+        body["settings"] = {}
+        return body
+
+    if identity.is_owner:
+        body["settings"] = dict(db.get("settings", {}))
+    else:
+        # A reseller has no business seeing bot tokens or the OTA repo, and
+        # showing them settings they cannot change is just confusing.
+        body["settings"] = {}
+        body["quota"] = reseller_quota(identity)
+        body["usage"] = reseller_usage(db, identity)
+    return body
 
 
 @app.post("/api/change-password")
-async def api_change_password(request: Request, user: str = Depends(require_auth)):
+async def api_change_password(request: Request, user: Identity = Depends(require_auth)):
+    """Each account changes its own credentials.
+
+    A reseller may only change their password: the username was handed to them
+    by the owner, and letting them rename themselves would let them collide
+    with an account the owner is about to create.
+    """
     payload = await _json_body(request)
     old_password = payload.get("old_password") or ""
     new_password = payload.get("new_password") or ""
     new_username = (payload.get("new_username") or "").strip()
     db = await store.get()
-    admin = db["admin"]
-    if not await verify_password_async(old_password, admin["salt"], admin["password_hash"]):
+
+    if user.is_owner:
+        account = db["admin"]
+    else:
+        account = reseller_by_id(db, user.id)
+        if not account:
+            raise HTTPException(401, "unauthorized")
+        if new_username and new_username != account["username"]:
+            raise HTTPException(403, "owner-only")
+        new_username = ""
+
+    if not await verify_password_async(old_password, account["salt"], account["password_hash"]):
         raise HTTPException(401, "wrong-old-password")
     if new_username and not USERNAME_RE.match(new_username):
         raise HTTPException(400, "invalid-username")
@@ -1604,19 +1741,31 @@ async def api_change_password(request: Request, user: str = Depends(require_auth
         raise HTTPException(400, "weak-password")
     if not new_password and not new_username:
         raise HTTPException(400, "nothing-to-change")
+    if new_username and reseller_by_username(db, new_username):
+        raise HTTPException(400, "username-taken")
 
     hp = await hash_password_async(new_password) if new_password else None
+    reseller_id = None if user.is_owner else user.id
 
     def _apply(db):
+        target = db["admin"] if reseller_id is None else reseller_by_id(db, reseller_id)
+        if target is None:
+            raise HTTPException(401, "unauthorized")
         if hp:
-            db["admin"]["password_hash"] = hp["hash"]
-            db["admin"]["salt"] = hp["salt"]
+            target["password_hash"] = hp["hash"]
+            target["salt"] = hp["salt"]
         if new_username:
-            db["admin"]["username"] = new_username
+            target["username"] = new_username
 
     db = await store.mutate(_apply)
     resp = JSONResponse({"ok": True})
-    set_session_cookie(resp, request, db, db["admin"]["username"])
+    if reseller_id is None:
+        set_session_cookie(resp, request, db, db["admin"]["username"])
+    else:
+        # Their old cookie is dead the moment the hash changes, so hand back a
+        # fresh one rather than bouncing them to the login page.
+        record = reseller_by_id(db, reseller_id)
+        set_session_cookie(resp, request, db, record["username"], reseller=record)
     return resp
 
 
@@ -1663,7 +1812,7 @@ OTA_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$")
 
 
 @app.post("/api/settings")
-async def api_update_settings(request: Request, user: str = Depends(require_auth)):
+async def api_update_settings(request: Request, user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     clean = {}
 
@@ -1740,14 +1889,14 @@ def _append_login_log(db, ip: str, ok: bool, method: str):
 
 
 @app.get("/api/login-log")
-async def api_login_log(user: str = Depends(require_auth)):
+async def api_login_log(user: Identity = Depends(require_owner)):
     db = await store.get()
     return {"entries": list(reversed(db.get("login_log", [])))[:100]}
 
 
 # ------------------------------------------------------------------ two-factor auth
 @app.get("/api/2fa/status")
-async def api_2fa_status(user: str = Depends(require_auth)):
+async def api_2fa_status(user: Identity = Depends(require_owner)):
     db = await store.get()
     twofa = db.get("twofa") or {}
     return {
@@ -1758,7 +1907,7 @@ async def api_2fa_status(user: str = Depends(require_auth)):
 
 
 @app.post("/api/2fa/setup")
-async def api_2fa_setup(request: Request, user: str = Depends(require_auth)):
+async def api_2fa_setup(request: Request, user: Identity = Depends(require_owner)):
     """Stage a secret. It stays inactive until a valid code confirms it, so a
     half-finished enrolment can never lock the admin out."""
     db = await store.get()
@@ -1779,7 +1928,7 @@ async def api_2fa_setup(request: Request, user: str = Depends(require_auth)):
 
 
 @app.get("/api/2fa/qr")
-async def api_2fa_qr(user: str = Depends(require_auth)):
+async def api_2fa_qr(user: Identity = Depends(require_owner)):
     db = await store.get()
     secret = (db.get("twofa") or {}).get("secret")
     if not secret:
@@ -1798,7 +1947,7 @@ async def api_2fa_qr(user: str = Depends(require_auth)):
 
 
 @app.post("/api/2fa/enable")
-async def api_2fa_enable(request: Request, user: str = Depends(require_auth)):
+async def api_2fa_enable(request: Request, user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     code = str(payload.get("code") or "").strip()
     db = await store.get()
@@ -1825,7 +1974,7 @@ async def api_2fa_enable(request: Request, user: str = Depends(require_auth)):
 
 
 @app.post("/api/2fa/disable")
-async def api_2fa_disable(request: Request, user: str = Depends(require_auth)):
+async def api_2fa_disable(request: Request, user: Identity = Depends(require_owner)):
     """Requires the account password: a stolen session alone must not be able
     to strip the second factor."""
     payload = await _json_body(request)
@@ -1843,7 +1992,7 @@ async def api_2fa_disable(request: Request, user: str = Depends(require_auth)):
 
 
 @app.post("/api/2fa/recovery-codes")
-async def api_2fa_regen_recovery(request: Request, user: str = Depends(require_auth)):
+async def api_2fa_regen_recovery(request: Request, user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     password = payload.get("password") or ""
     db = await store.get()
@@ -1865,7 +2014,7 @@ async def api_2fa_regen_recovery(request: Request, user: str = Depends(require_a
 
 # ------------------------------------------------------------------ notifications
 @app.post("/api/notify/test")
-async def api_notify_test(user: str = Depends(require_auth)):
+async def api_notify_test(user: Identity = Depends(require_owner)):
     db = await store.get()
     token, chat, _ = _notify_config(db)
     if not token:
@@ -1878,7 +2027,7 @@ async def api_notify_test(user: str = Depends(require_auth)):
 
 
 @app.get("/api/notify/status")
-async def api_notify_status(user: str = Depends(require_auth)):
+async def api_notify_status(user: Identity = Depends(require_owner)):
     db = await store.get()
     token, chat, settings = _notify_config(db)
     return {
@@ -1887,6 +2036,61 @@ async def api_notify_status(user: str = Depends(require_auth)):
         "expiry_enabled": bool(settings.get("notify_expiry_enabled", True)),
         "pending_alerts": len(await _scan_alerts(db)) if token else 0,
     }
+
+
+# ------------------------------------------------------------------ ownership
+def visible_inbounds(db, identity) -> list:
+    """The rows this identity is allowed to see at all."""
+    if identity.is_owner:
+        return list(db["inbounds"])
+    return [ib for ib in db["inbounds"] if ib.get("owner") == identity.id]
+
+
+def require_owned(db, identity, uid: str) -> dict:
+    """Fetch one inbound, or refuse.
+
+    A reseller asking about somebody else's user gets the same 404 as one that
+    does not exist: distinguishing them would leak which uids are in use.
+    """
+    ib = inbound_by_uid(db, uid)
+    if not ib or not identity.owns(ib):
+        raise HTTPException(404, "not-found")
+    return ib
+
+
+def reseller_quota(identity) -> dict:
+    record = identity.record or {}
+    try:
+        max_users = max(0, int(record.get("max_users") or 0))
+    except (TypeError, ValueError):
+        max_users = 0
+    try:
+        max_traffic = max(0.0, float(record.get("max_traffic_gb") or 0))
+    except (TypeError, ValueError):
+        max_traffic = 0.0
+    return {"max_users": max_users, "max_traffic_gb": max_traffic}
+
+
+def reseller_usage(db, identity) -> dict:
+    rows = visible_inbounds(db, identity)
+    used_bytes = sum((ib.get("used_up") or 0) + (ib.get("used_down") or 0) for ib in rows)
+    return {"users": len(rows), "traffic_gb": used_bytes / (1024 ** 3)}
+
+
+def assert_can_create(db, identity, count: int = 1):
+    """Refuse before creating anything, so a bulk run is all-or-nothing."""
+    if identity.is_owner:
+        if len(db["inbounds"]) + count > MAX_INBOUNDS:
+            raise HTTPException(400, "inbound-limit-reached")
+        return
+    quota = reseller_quota(identity)
+    usage = reseller_usage(db, identity)
+    if quota["max_users"] and usage["users"] + count > quota["max_users"]:
+        raise HTTPException(403, "reseller-user-limit")
+    if quota["max_traffic_gb"] and usage["traffic_gb"] >= quota["max_traffic_gb"]:
+        raise HTTPException(403, "reseller-traffic-limit")
+    if len(db["inbounds"]) + count > MAX_INBOUNDS:
+        raise HTTPException(400, "inbound-limit-reached")
 
 
 # ------------------------------------------------------------------ inbounds api
@@ -1957,17 +2161,16 @@ def serialize_inbound(ib, include_secrets: bool = True) -> dict:
 
 
 @app.get("/api/inbounds")
-async def api_list_inbounds(user: str = Depends(require_auth)):
+async def api_list_inbounds(user: Identity = Depends(require_auth)):
     db = await store.get()
-    return {"inbounds": [serialize_inbound(ib) for ib in db["inbounds"]]}
+    return {"inbounds": [serialize_inbound(ib) for ib in visible_inbounds(db, user)]}
 
 
 @app.post("/api/inbounds")
-async def api_create_inbound(request: Request, user: str = Depends(require_auth)):
+async def api_create_inbound(request: Request, user: Identity = Depends(require_auth)):
     payload = await _json_body(request)
     db = await store.get()
-    if len(db["inbounds"]) >= MAX_INBOUNDS:
-        raise HTTPException(400, "inbound-limit-reached")
+    assert_can_create(db, user)
 
     fields = sanitize_inbound_payload(payload, partial=False)
     if not payload.get("fp"):
@@ -1978,6 +2181,7 @@ async def api_create_inbound(request: Request, user: str = Depends(require_auth)
         "uid": gen_uid(),
         "uuid": gen_uuid(),
         "sub_token": gen_uid(),
+        "owner": None if user.is_owner else user.id,
         "enabled": True,
         "created_at": now,
         "expire_at": (now + fields["expire_days"] * 86400) if fields["expire_days"] > 0 else None,
@@ -1995,15 +2199,13 @@ async def api_create_inbound(request: Request, user: str = Depends(require_auth)
 
 
 @app.patch("/api/inbounds/{uid}")
-async def api_update_inbound(uid: str, request: Request, user: str = Depends(require_auth)):
+async def api_update_inbound(uid: str, request: Request, user: Identity = Depends(require_auth)):
     payload = await _json_body(request)
     fields = sanitize_inbound_payload(payload, partial=True)
     result = {}
 
     def _apply(db):
-        ib = inbound_by_uid(db, uid)
-        if not ib:
-            raise HTTPException(404, "not-found")
+        ib = require_owned(db, user, uid)
         # Only restart the validity window when the admin actually changed the
         # number. Recomputing from created_at (the old behaviour) made renewing
         # a long-standing user expire them on the spot, while recomputing on
@@ -2021,7 +2223,7 @@ async def api_update_inbound(uid: str, request: Request, user: str = Depends(req
 
 
 @app.post("/api/inbounds/{uid}/renew")
-async def api_renew_inbound(uid: str, request: Request, user: str = Depends(require_auth)):
+async def api_renew_inbound(uid: str, request: Request, user: Identity = Depends(require_auth)):
     """Extend a subscription by N days from whichever is later: now or its current expiry."""
     payload = await _json_body(request)
     days = _as_number(payload.get("days"), "days", 1, 3650, True)
@@ -2029,9 +2231,7 @@ async def api_renew_inbound(uid: str, request: Request, user: str = Depends(requ
     result = {}
 
     def _apply(db):
-        ib = inbound_by_uid(db, uid)
-        if not ib:
-            raise HTTPException(404, "not-found")
+        ib = require_owned(db, user, uid)
         base = max(time.time(), ib.get("expire_at") or 0)
         ib["expire_at"] = base + days * 86400
         ib["expire_days"] = int((ib["expire_at"] - ib.get("created_at", time.time())) // 86400)
@@ -2048,10 +2248,13 @@ async def api_renew_inbound(uid: str, request: Request, user: str = Depends(requ
 
 
 @app.delete("/api/inbounds/{uid}")
-async def api_delete_inbound(uid: str, user: str = Depends(require_auth)):
+async def api_delete_inbound(uid: str, user: Identity = Depends(require_auth)):
     found = {"v": False}
 
     def _apply(db):
+        target = inbound_by_uid(db, uid)
+        if not target or not user.owns(target):
+            raise HTTPException(404, "not-found")
         before = len(db["inbounds"])
         db["inbounds"] = [ib for ib in db["inbounds"] if ib.get("uid") != uid]
         found["v"] = len(db["inbounds"]) != before
@@ -2067,11 +2270,9 @@ async def api_delete_inbound(uid: str, user: str = Depends(require_auth)):
 
 
 @app.post("/api/inbounds/{uid}/reset-usage")
-async def api_reset_usage(uid: str, user: str = Depends(require_auth)):
+async def api_reset_usage(uid: str, user: Identity = Depends(require_auth)):
     def _apply(db):
-        ib = inbound_by_uid(db, uid)
-        if not ib:
-            raise HTTPException(404, "not-found")
+        ib = require_owned(db, user, uid)
         ib["used_up"] = 0
         ib["used_down"] = 0
         ib["request_count"] = 0
@@ -2083,7 +2284,7 @@ async def api_reset_usage(uid: str, user: str = Depends(require_auth)):
 
 
 @app.post("/api/inbounds/{uid}/rotate-link")
-async def api_rotate_sub_link(uid: str, user: str = Depends(require_auth)):
+async def api_rotate_sub_link(uid: str, user: Identity = Depends(require_auth)):
     """Issue a new subscription URL, killing the old one.
 
     Deliberately does *not* touch the uuid or the WebSocket path: a leaked
@@ -2094,9 +2295,7 @@ async def api_rotate_sub_link(uid: str, user: str = Depends(require_auth)):
     result = {}
 
     def _apply(db):
-        ib = inbound_by_uid(db, uid)
-        if not ib:
-            raise HTTPException(404, "not-found")
+        ib = require_owned(db, user, uid)
         ib["sub_token"] = gen_uid()
         result.update(ib)
 
@@ -2106,12 +2305,10 @@ async def api_rotate_sub_link(uid: str, user: str = Depends(require_auth)):
 
 
 @app.post("/api/inbounds/{uid}/regenerate")
-async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
+async def api_regenerate_uuid(uid: str, user: Identity = Depends(require_auth)):
     """Anti-resale: instantly revoke old links by rotating the VLESS uuid."""
     def _apply(db):
-        ib = inbound_by_uid(db, uid)
-        if not ib:
-            raise HTTPException(404, "not-found")
+        ib = require_owned(db, user, uid)
         ib["uuid"] = gen_uuid()
 
     db = await store.mutate(_apply)
@@ -2122,7 +2319,7 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
 
 # ------------------------------------------------------------------ trials & retention
 @app.get("/api/fragment-profiles")
-async def api_fragment_profiles(user: str = Depends(require_auth)):
+async def api_fragment_profiles(user: Identity = Depends(require_owner)):
     db = await store.get()
     return {"profiles": fragments.catalogue(),
             "current": (db.get("settings") or {}).get("fragment_profile",
@@ -2131,14 +2328,13 @@ async def api_fragment_profiles(user: str = Depends(require_auth)):
 
 
 @app.post("/api/inbounds/trial")
-async def api_create_trial(request: Request, user: str = Depends(require_auth)):
+async def api_create_trial(request: Request, user: Identity = Depends(require_auth)):
     """One-click throwaway account, sized from settings."""
     db = await store.get()
     settings = db.get("settings") or {}
     if not settings.get("trial_enabled", True):
         raise HTTPException(400, "trial-disabled")
-    if len(db["inbounds"]) >= MAX_INBOUNDS:
-        raise HTTPException(400, "inbound-limit-reached")
+    assert_can_create(db, user)
 
     try:
         quota_gb = float(settings.get("trial_gb", 1) or 0)
@@ -2148,11 +2344,12 @@ async def api_create_trial(request: Request, user: str = Depends(require_auth)):
     prefix = (settings.get("trial_prefix") or "trial").strip()[:40] or "trial"
 
     now = time.time()
-    existing = sum(1 for ib in db["inbounds"] if ib.get("is_trial"))
+    existing = sum(1 for ib in visible_inbounds(db, user) if ib.get("is_trial"))
     ib = {
         "uid": gen_uid(),
         "uuid": gen_uuid(),
         "sub_token": gen_uid(),
+        "owner": None if user.is_owner else user.id,
         "name": f"{prefix}-{existing + 1:03d}",
         "enabled": True,
         "created_at": now,
@@ -2181,11 +2378,14 @@ async def api_create_trial(request: Request, user: str = Depends(require_auth)):
 
 
 @app.get("/api/cleanup")
-async def api_cleanup_preview(user: str = Depends(require_auth)):
+async def api_cleanup_preview(user: Identity = Depends(require_owner)):
     """What a sweep would do right now, so it can be checked before enabling."""
     db = await store.get()
     plan = _retention_plan(db)
-    names = {ib["uid"]: ib.get("name") for ib in db.get("inbounds", [])}
+    visible = {ib["uid"] for ib in visible_inbounds(db, user)}
+    plan = {"disable": [u for u in plan["disable"] if u in visible],
+            "delete": [u for u in plan["delete"] if u in visible]}
+    names = {ib["uid"]: ib.get("name") for ib in visible_inbounds(db, user)}
     return {
         "enabled": bool((db.get("settings") or {}).get("cleanup_enabled")),
         "last": db.get("last_cleanup"),
@@ -2195,9 +2395,146 @@ async def api_cleanup_preview(user: str = Depends(require_auth)):
 
 
 @app.post("/api/cleanup")
-async def api_cleanup_now(user: str = Depends(require_auth)):
+async def api_cleanup_now(user: Identity = Depends(require_owner)):
     result = await _run_cleanup()
     return {"ok": True, **result}
+
+
+# ------------------------------------------------------------------ resellers
+MAX_RESELLERS = 100
+
+
+def serialize_reseller(record: dict, db) -> dict:
+    """Never returns the password hash or salt."""
+    rows = [ib for ib in db.get("inbounds", []) if ib.get("owner") == record.get("id")]
+    used = sum((ib.get("used_up") or 0) + (ib.get("used_down") or 0) for ib in rows)
+    return {
+        "id": record.get("id"),
+        "username": record.get("username"),
+        "enabled": record.get("enabled", True),
+        "created_at": record.get("created_at"),
+        "note": record.get("note", ""),
+        "max_users": record.get("max_users", 0),
+        "max_traffic_gb": record.get("max_traffic_gb", 0),
+        "users": len(rows),
+        "used_gb": round(used / (1024 ** 3), 3),
+    }
+
+
+@app.get("/api/resellers")
+async def api_list_resellers(user: Identity = Depends(require_owner)):
+    db = await store.get()
+    return {"resellers": [serialize_reseller(r, db) for r in db.get("resellers", [])]}
+
+
+@app.post("/api/resellers")
+async def api_create_reseller(request: Request, user: Identity = Depends(require_owner)):
+    payload = await _json_body(request)
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not USERNAME_RE.match(username):
+        raise HTTPException(400, "invalid-username")
+    if len(password) < MIN_PASSWORD_LEN:
+        raise HTTPException(400, "weak-password")
+
+    db = await store.get()
+    if len(db.get("resellers", [])) >= MAX_RESELLERS:
+        raise HTTPException(400, "reseller-limit-reached")
+    # The owner's name is reserved: two accounts answering to one username
+    # would make the login ambiguous.
+    if username == (db.get("admin") or {}).get("username") or reseller_by_username(db, username):
+        raise HTTPException(400, "username-taken")
+
+    hp = await hash_password_async(password)
+    record = {
+        "id": gen_uid(),
+        "username": username,
+        "password_hash": hp["hash"],
+        "salt": hp["salt"],
+        "enabled": bool(payload.get("enabled", True)),
+        "created_at": time.time(),
+        "note": str(payload.get("note") or "").strip()[:200],
+        "max_users": _as_number(payload.get("max_users"), "max_users", 0, 100_000, True),
+        "max_traffic_gb": _as_number(payload.get("max_traffic_gb"), "max_traffic_gb",
+                                     0, 1_000_000, False),
+    }
+
+    def _apply(db):
+        db.setdefault("resellers", []).append(record)
+
+    db = await store.mutate(_apply)
+    return {"ok": True, "reseller": serialize_reseller(record, db)}
+
+
+@app.patch("/api/resellers/{reseller_id}")
+async def api_update_reseller(reseller_id: str, request: Request,
+                              user: Identity = Depends(require_owner)):
+    payload = await _json_body(request)
+    new_password = payload.get("password") or ""
+    if new_password and len(new_password) < MIN_PASSWORD_LEN:
+        raise HTTPException(400, "weak-password")
+    hp = await hash_password_async(new_password) if new_password else None
+
+    fields = {}
+    if "note" in payload:
+        fields["note"] = str(payload.get("note") or "").strip()[:200]
+    if "enabled" in payload:
+        fields["enabled"] = bool(payload["enabled"])
+    if "max_users" in payload:
+        fields["max_users"] = _as_number(payload["max_users"], "max_users", 0, 100_000, True)
+    if "max_traffic_gb" in payload:
+        fields["max_traffic_gb"] = _as_number(payload["max_traffic_gb"],
+                                              "max_traffic_gb", 0, 1_000_000, False)
+    result = {}
+
+    def _apply(db):
+        record = reseller_by_id(db, reseller_id)
+        if not record:
+            raise HTTPException(404, "not-found")
+        record.update(fields)
+        if hp:
+            # Changing the password drops that reseller's live sessions,
+            # since the fingerprint baked into their cookie no longer matches.
+            record["password_hash"] = hp["hash"]
+            record["salt"] = hp["salt"]
+        result.update(record)
+
+    db = await store.mutate(_apply)
+    return {"ok": True, "reseller": serialize_reseller(result, db)}
+
+
+@app.delete("/api/resellers/{reseller_id}")
+async def api_delete_reseller(reseller_id: str, request: Request,
+                              user: Identity = Depends(require_owner)):
+    """Remove a reseller. Their users are kept and handed to the owner unless
+    the caller explicitly asks for them to go too."""
+    delete_users = str(request.query_params.get("delete_users", "")).lower() in ("1", "true", "yes")
+    removed = {"reseller": False, "users": 0}
+    orphaned = []
+
+    def _apply(db):
+        record = reseller_by_id(db, reseller_id)
+        if not record:
+            raise HTTPException(404, "not-found")
+        db["resellers"] = [r for r in db.get("resellers", []) if r.get("id") != reseller_id]
+        removed["reseller"] = True
+
+        owned = [ib for ib in db["inbounds"] if ib.get("owner") == reseller_id]
+        if delete_users:
+            orphaned.extend(ib["uid"] for ib in owned)
+            db["inbounds"] = [ib for ib in db["inbounds"] if ib.get("owner") != reseller_id]
+            removed["users"] = len(owned)
+        else:
+            # Reassign rather than orphan: a row whose owner no longer exists
+            # would be invisible to everyone.
+            for ib in owned:
+                ib["owner"] = None
+
+    await store.mutate(_apply)
+    for uid in orphaned:
+        await _disconnect_uid(uid)
+        runtime["active"].pop(uid, None)
+    return {"ok": True, **removed}
 
 
 # ------------------------------------------------------------------ plans
@@ -2218,13 +2555,13 @@ def sanitize_plan(payload: dict) -> dict:
 
 
 @app.get("/api/plans")
-async def api_list_plans(user: str = Depends(require_auth)):
+async def api_list_plans(user: Identity = Depends(require_auth)):
     db = await store.get()
     return {"plans": db.get("plans", [])}
 
 
 @app.post("/api/plans")
-async def api_create_plan(request: Request, user: str = Depends(require_auth)):
+async def api_create_plan(request: Request, user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     fields = sanitize_plan(payload)
     db = await store.get()
@@ -2241,7 +2578,7 @@ async def api_create_plan(request: Request, user: str = Depends(require_auth)):
 
 
 @app.patch("/api/plans/{plan_id}")
-async def api_update_plan(plan_id: str, request: Request, user: str = Depends(require_auth)):
+async def api_update_plan(plan_id: str, request: Request, user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     fields = sanitize_plan(payload)
     result = {}
@@ -2259,7 +2596,7 @@ async def api_update_plan(plan_id: str, request: Request, user: str = Depends(re
 
 
 @app.delete("/api/plans/{plan_id}")
-async def api_delete_plan(plan_id: str, user: str = Depends(require_auth)):
+async def api_delete_plan(plan_id: str, user: Identity = Depends(require_owner)):
     found = {"v": False}
 
     def _apply(db):
@@ -2276,7 +2613,7 @@ async def api_delete_plan(plan_id: str, user: str = Depends(require_auth)):
 
 # ------------------------------------------------------------------ bulk operations
 @app.post("/api/inbounds/bulk")
-async def api_bulk_create(request: Request, user: str = Depends(require_auth)):
+async def api_bulk_create(request: Request, user: Identity = Depends(require_auth)):
     """Create N users from a plan (or explicit fields) in one write.
 
     Provisioning a batch one HTTP call at a time meant one full db.json
@@ -2307,8 +2644,7 @@ async def api_bulk_create(request: Request, user: str = Depends(require_auth)):
             "max_requests": _as_number(payload.get("max_requests"), "max_requests", 0, 100_000_000, True),
         }
 
-    if len(db["inbounds"]) + count > MAX_INBOUNDS:
-        raise HTTPException(400, "inbound-limit-reached")
+    assert_can_create(db, user, count)
 
     settings = db.get("settings") or {}
     fp = payload.get("fp") or settings.get("default_fingerprint", "chrome")
@@ -2325,6 +2661,7 @@ async def api_bulk_create(request: Request, user: str = Depends(require_auth)):
             "uid": gen_uid(),
             "uuid": gen_uuid(),
             "sub_token": gen_uid(),
+            "owner": None if user.is_owner else user.id,
             "name": f"{prefix}-{str(start + i).zfill(width)}"[:64],
             "enabled": True,
             "created_at": now,
@@ -2352,7 +2689,7 @@ BULK_ACTIONS = {"delete", "enable", "disable", "reset-usage", "renew"}
 
 
 @app.post("/api/inbounds/bulk-action")
-async def api_bulk_action(request: Request, user: str = Depends(require_auth)):
+async def api_bulk_action(request: Request, user: Identity = Depends(require_auth)):
     payload = await _json_body(request)
     action = payload.get("action")
     if action not in BULK_ACTIONS:
@@ -2361,6 +2698,13 @@ async def api_bulk_action(request: Request, user: str = Depends(require_auth)):
     if not isinstance(uids, list) or not uids:
         raise HTTPException(400, "no-uids")
     uids = [str(u) for u in uids][:MAX_INBOUNDS]
+    # Silently narrowing to what the caller owns means a reseller passing a
+    # stranger's uid changes nothing, rather than the request half-applying.
+    db_now = await store.get()
+    owned = {ib["uid"] for ib in visible_inbounds(db_now, user)}
+    uids = [u for u in uids if u in owned]
+    if not uids:
+        raise HTTPException(404, "not-found")
     days = _as_number(payload.get("days") or 30, "days", 1, 3650, True) if action == "renew" else 0
     affected = {"n": 0}
 
@@ -2423,11 +2767,9 @@ def _history_series(db, ib) -> list:
 
 
 @app.get("/api/inbounds/{uid}/history")
-async def api_inbound_history(uid: str, user: str = Depends(require_auth)):
+async def api_inbound_history(uid: str, user: Identity = Depends(require_auth)):
     db = await store.get()
-    ib = inbound_by_uid(db, uid)
-    if not ib:
-        raise HTTPException(404, "not-found")
+    ib = require_owned(db, user, uid)
     return {"uid": uid, "name": ib["name"], "history": _history_series(db, ib)}
 
 
@@ -2575,11 +2917,9 @@ def subscription_userinfo(ib) -> str:
 
 
 @app.get("/api/inbounds/{uid}/links")
-async def api_inbound_links(uid: str, request: Request, user: str = Depends(require_auth)):
+async def api_inbound_links(uid: str, request: Request, user: Identity = Depends(require_auth)):
     db = await store.get()
-    ib = inbound_by_uid(db, uid)
-    if not ib:
-        raise HTTPException(404, "not-found")
+    ib = require_owned(db, user, uid)
     origin = public_origin(request, db)
     token = sub_token_of(ib)
     return {
@@ -2591,11 +2931,9 @@ async def api_inbound_links(uid: str, request: Request, user: str = Depends(requ
 
 
 @app.get("/api/inbounds/{uid}/qr")
-async def api_inbound_qr(uid: str, request: Request, user: str = Depends(require_auth)):
+async def api_inbound_qr(uid: str, request: Request, user: Identity = Depends(require_auth)):
     db = await store.get()
-    ib = inbound_by_uid(db, uid)
-    if not ib:
-        raise HTTPException(404, "not-found")
+    ib = require_owned(db, user, uid)
     configs = build_configs(request, db, ib)
     # With several routes a single config QR would pin the user to one of
     # them; the subscription URL carries all of them and keeps updating.
@@ -2644,13 +2982,13 @@ def sanitize_endpoint(payload: dict) -> dict:
 
 
 @app.get("/api/endpoints")
-async def api_list_endpoints(user: str = Depends(require_auth)):
+async def api_list_endpoints(user: Identity = Depends(require_owner)):
     db = await store.get()
     return {"endpoints": db.get("endpoints", [])}
 
 
 @app.post("/api/endpoints")
-async def api_create_endpoint(request: Request, user: str = Depends(require_auth)):
+async def api_create_endpoint(request: Request, user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     fields = sanitize_endpoint(payload)
     db = await store.get()
@@ -2669,7 +3007,7 @@ async def api_create_endpoint(request: Request, user: str = Depends(require_auth
 
 @app.patch("/api/endpoints/{endpoint_id}")
 async def api_update_endpoint(endpoint_id: str, request: Request,
-                              user: str = Depends(require_auth)):
+                              user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     fields = sanitize_endpoint(payload)
     result = {}
@@ -2687,7 +3025,7 @@ async def api_update_endpoint(endpoint_id: str, request: Request,
 
 
 @app.delete("/api/endpoints/{endpoint_id}")
-async def api_delete_endpoint(endpoint_id: str, user: str = Depends(require_auth)):
+async def api_delete_endpoint(endpoint_id: str, user: Identity = Depends(require_owner)):
     found = {"v": False}
 
     def _apply(db):
@@ -2703,7 +3041,7 @@ async def api_delete_endpoint(endpoint_id: str, user: str = Depends(require_auth
 
 
 @app.post("/api/endpoints/check-all")
-async def api_check_all_endpoints(user: str = Depends(require_auth)):
+async def api_check_all_endpoints(user: Identity = Depends(require_owner)):
     """Run the monitored probe across every endpoint, on demand."""
     transitions = await _run_health_checks()
     db = await store.get()
@@ -2716,7 +3054,7 @@ async def api_check_all_endpoints(user: str = Depends(require_auth)):
 
 
 @app.post("/api/endpoints/{endpoint_id}/test")
-async def api_test_endpoint(endpoint_id: str, user: str = Depends(require_auth)):
+async def api_test_endpoint(endpoint_id: str, user: Identity = Depends(require_owner)):
     """Reachability + latency for one entry point.
 
     Hits /health through the endpoint's own address, which is what a client
@@ -2822,11 +3160,9 @@ async def sub_json(token: str, request: Request):
 
 
 @app.get("/api/inbounds/{uid}/sub")
-async def api_inbound_sub_alias(uid: str, request: Request, user: str = Depends(require_auth)):
+async def api_inbound_sub_alias(uid: str, request: Request, user: Identity = Depends(require_auth)):
     db = await store.get()
-    ib = inbound_by_uid(db, uid)
-    if not ib:
-        raise HTTPException(404, "not-found")
+    ib = require_owned(db, user, uid)
     return await sub_json(sub_token_of(ib), request)
 
 
@@ -2860,7 +3196,7 @@ async def api_public_status(token: str):
 
 # ------------------------------------------------------------------ backup / restore
 @app.get("/api/backup")
-async def api_backup(user: str = Depends(require_auth)):
+async def api_backup(user: Identity = Depends(require_owner)):
     """Download the full db as JSON. Contains the admin hash and session key."""
     db = await store.get()
     payload = store.snapshot_json()
@@ -2876,7 +3212,7 @@ async def api_backup(user: str = Depends(require_auth)):
 
 
 @app.post("/api/restore")
-async def api_restore(request: Request, user: str = Depends(require_auth)):
+async def api_restore(request: Request, user: Identity = Depends(require_owner)):
     payload = await _json_body(request)
     incoming = payload.get("db") if isinstance(payload.get("db"), dict) else payload
     if not isinstance(incoming.get("inbounds"), list) or not isinstance(incoming.get("admin"), dict):
@@ -2899,7 +3235,7 @@ async def api_restore(request: Request, user: str = Depends(require_auth)):
 
 # ------------------------------------------------------------------ user bot
 @app.get("/api/userbot")
-async def api_userbot_status(user: str = Depends(require_auth)):
+async def api_userbot_status(user: Identity = Depends(require_owner)):
     db = await store.get()
     settings = db.get("settings") or {}
     token = (settings.get("userbot_token") or "").strip()
@@ -2912,7 +3248,7 @@ async def api_userbot_status(user: str = Depends(require_auth)):
 
 
 @app.get("/api/userbot/requests")
-async def api_renew_requests(user: str = Depends(require_auth)):
+async def api_renew_requests(user: Identity = Depends(require_owner)):
     db = await store.get()
     requests = db.get("renew_requests") or {}
     rows = []
@@ -2924,7 +3260,7 @@ async def api_renew_requests(user: str = Depends(require_auth)):
 
 
 @app.post("/api/userbot/test")
-async def api_userbot_test(user: str = Depends(require_auth)):
+async def api_userbot_test(user: Identity = Depends(require_owner)):
     db = await store.get()
     token = ((db.get("settings") or {}).get("userbot_token") or "").strip()
     if not token:
@@ -2937,7 +3273,7 @@ async def api_userbot_test(user: str = Depends(require_auth)):
 
 
 @app.post("/api/userbot/unbind/{uid}")
-async def api_userbot_unbind(uid: str, user: str = Depends(require_auth)):
+async def api_userbot_unbind(uid: str, user: Identity = Depends(require_owner)):
     """Detach every chat bound to a subscription, e.g. after reselling it."""
     removed = {"n": 0}
 
@@ -2953,7 +3289,7 @@ async def api_userbot_unbind(uid: str, user: str = Depends(require_auth)):
 
 # ------------------------------------------------------------------ off-box backup
 @app.get("/api/backup/telegram")
-async def api_backup_status(user: str = Depends(require_auth)):
+async def api_backup_status(user: Identity = Depends(require_owner)):
     db = await store.get()
     token, chat = _backup_credentials(db)
     settings = db.get("settings") or {}
@@ -2968,14 +3304,14 @@ async def api_backup_status(user: str = Depends(require_auth)):
 
 
 @app.post("/api/backup/telegram")
-async def api_backup_now(user: str = Depends(require_auth)):
+async def api_backup_now(user: Identity = Depends(require_owner)):
     db = await store.get()
     record = await _run_backup(db, reason="manual")
     return {"ok": True, "last": record}
 
 
 @app.post("/api/backup/telegram/restore")
-async def api_backup_restore(user: str = Depends(require_auth)):
+async def api_backup_restore(user: Identity = Depends(require_owner)):
     db = await store.get()
     token, chat = _backup_credentials(db)
     if not token or not chat:
@@ -3051,7 +3387,7 @@ async def _current_colo() -> str:
 
 
 @app.get("/stats")
-async def stats(user: str = Depends(require_auth)):
+async def stats(user: Identity = Depends(require_auth)):
     db = await store.get()
     # interval=None samples since the previous call instead of sleeping 200ms
     # inside the event loop, which stalled every proxied connection per poll.
@@ -3062,20 +3398,39 @@ async def stats(user: str = Depends(require_auth)):
     pending_up = sum(d.get("up", 0) for d in runtime["pending_traffic"].values())
     pending_down = sum(d.get("down", 0) for d in runtime["pending_traffic"].values())
 
-    return {
+    body = {
         "cpu_percent": cpu,
         "mem_percent": mem.percent,
         "mem_used_mb": round(mem.used / 1024 / 1024, 1),
         "mem_total_mb": round(mem.total / 1024 / 1024, 1),
         "uptime_seconds": time.time() - started,
-        "total_up": db["stats"].get("total_up", 0) + pending_up,
-        "total_down": db["stats"].get("total_down", 0) + pending_down,
-        "hourly": db["stats"].get("hourly", []),
-        "inbounds_count": len(db["inbounds"]),
-        "active_connections": _total_active_connections(),
         "workers": WORKER_COUNT,
         "location": describe_colo(await _current_colo()),
     }
+    if user.is_owner:
+        body.update({
+            "total_up": db["stats"].get("total_up", 0) + pending_up,
+            "total_down": db["stats"].get("total_down", 0) + pending_down,
+            "hourly": db["stats"].get("hourly", []),
+            "inbounds_count": len(db["inbounds"]),
+            "active_connections": _total_active_connections(),
+        })
+        return body
+
+    # A reseller's numbers cover their own users only. The hourly series is
+    # kept panel-wide, so there is nothing honest to show them there.
+    rows = visible_inbounds(db, user)
+    uids = {ib["uid"] for ib in rows}
+    body.update({
+        "total_up": sum(ib.get("used_up") or 0 for ib in rows),
+        "total_down": sum(ib.get("used_down") or 0 for ib in rows),
+        "hourly": [],
+        "inbounds_count": len(rows),
+        "active_connections": _active_connections_for(uids),
+        "quota": reseller_quota(user),
+        "usage": reseller_usage(db, user),
+    })
+    return body
 
 
 def _total_active_connections() -> int:
@@ -3083,6 +3438,14 @@ def _total_active_connections() -> int:
     if j is None:
         return sum(len(v) for v in runtime["active"].values())
     return sum(j.merged_connection_counts(runtime["active"]).values())
+
+
+def _active_connections_for(uids: set) -> int:
+    j = _journal()
+    if j is None:
+        return sum(len(v) for uid, v in runtime["active"].items() if uid in uids)
+    counts = j.merged_connection_counts(runtime["active"])
+    return sum(n for uid, n in counts.items() if uid in uids)
 
 
 def _ver_tuple(v):
@@ -3119,7 +3482,7 @@ def _ota_repo(db) -> str:
 
 
 @app.get("/api/ota/check")
-async def api_ota_check(user: str = Depends(require_auth)):
+async def api_ota_check(user: Identity = Depends(require_owner)):
     db = await store.get()
     repo = _ota_repo(db)
     current = APP_VERSION
@@ -3195,7 +3558,7 @@ def _apply_staged_update(staged_dir: str, live_dir: str) -> list:
 
 
 @app.post("/api/ota/update")
-async def api_ota_update(request: Request, user: str = Depends(require_auth)):
+async def api_ota_update(request: Request, user: Identity = Depends(require_owner)):
     if UPDATE_LOCK.locked():
         raise HTTPException(409, "update-already-in-progress")
 

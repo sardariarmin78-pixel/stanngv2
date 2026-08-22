@@ -31,13 +31,14 @@
       <div class="nav-label" data-i18n="nav_group_manage">مدیریت</div>
       <div class="nav-item active" data-view="dashboard"><svg><use href="#icon-dashboard"/></svg><span data-i18n="nav_dashboard">داشبورد</span></div>
       <div class="nav-item" data-view="inbounds"><svg><use href="#icon-users"/></svg><span data-i18n="nav_inbounds">کاربران</span><span class="badge" id="navInboundCount">0</span></div>
-      <div class="nav-item" data-view="plans"><svg><use href="#icon-layers"/></svg><span data-i18n="nav_plans">پلن‌ها</span></div>
-      <div class="nav-item" data-view="endpoints"><svg><use href="#icon-globe"/></svg><span data-i18n="nav_endpoints">لوکیشن‌ها</span><span class="badge" id="navEndpointCount">0</span></div>
+      <div class="nav-item" data-view="plans" data-owner-only><svg><use href="#icon-layers"/></svg><span data-i18n="nav_plans">پلن‌ها</span></div>
+      <div class="nav-item" data-view="resellers" data-owner-only><svg><use href="#icon-reseller"/></svg><span data-i18n="nav_resellers">نمایندگان</span><span class="badge" id="navResellerCount">0</span></div>
+      <div class="nav-item" data-view="endpoints" data-owner-only><svg><use href="#icon-globe"/></svg><span data-i18n="nav_endpoints">لوکیشن‌ها</span><span class="badge" id="navEndpointCount">0</span></div>
       <div class="nav-item" data-view="traffic"><svg><use href="#icon-traffic"/></svg><span data-i18n="nav_traffic">ترافیک</span></div>
       <div class="nav-label" data-i18n="nav_group_system">سیستم</div>
       <div class="nav-item" data-view="security"><svg><use href="#icon-shield"/></svg><span data-i18n="nav_security">امنیت</span></div>
-      <div class="nav-item" data-view="notifications"><svg><use href="#icon-bell"/></svg><span data-i18n="nav_notifications">اعلان‌ها</span></div>
-      <div class="nav-item" data-view="settings"><svg><use href="#icon-settings"/></svg><span data-i18n="nav_settings">تنظیمات</span></div>
+      <div class="nav-item" data-view="notifications" data-owner-only><svg><use href="#icon-bell"/></svg><span data-i18n="nav_notifications">اعلان‌ها</span></div>
+      <div class="nav-item" data-view="settings" data-owner-only><svg><use href="#icon-settings"/></svg><span data-i18n="nav_settings">تنظیمات</span></div>
     </nav>
     <div class="sidebar-footer">
       <div class="nav-item" id="logoutBtn"><svg><use href="#icon-logout"/></svg><span data-i18n="nav_logout">خروج</span></div>
@@ -49,6 +50,7 @@
       <div class="flex items-center gap-12" style="min-width:0;">
         <button class="icon-btn menu-toggle" id="menuToggle" aria-label="menu"><svg><use href="#icon-menu"/></svg></button>
         <h1 id="viewTitle" data-i18n="nav_dashboard">داشبورد</h1>
+        <span class="pill pill-muted" id="roleBadge" style="display:none;"></span>
       </div>
       <div class="topbar-actions">
         <div class="lang-toggle">
@@ -110,7 +112,7 @@
         </div>
 
         <div class="grid">
-          <div class="col-8 win">
+          <div class="col-8 win" data-owner-only>
             <div class="win-head">
               <h3><svg><use href="#icon-chart"/></svg><span data-i18n="dash_hourly_chart">نمودار ترافیک ساعتی</span></h3>
             </div>
@@ -118,15 +120,44 @@
               <div class="chart-wrap"><canvas id="trafficChart" height="230"></canvas></div>
             </div>
           </div>
+
+          <!-- Shown instead of the panel-wide chart when a reseller is signed in:
+               the hourly series is not tracked per reseller, so their own quota
+               is the useful thing to put here. -->
+          <div class="col-8 win" data-reseller-only style="display:none;">
+            <div class="win-head">
+              <h3><svg><use href="#icon-reseller"/></svg><span data-i18n="rs_my_quota">سهمیه من</span></h3>
+            </div>
+            <div class="win-body flex-col gap-16">
+              <div>
+                <div class="flex items-center justify-between small mb-8">
+                  <span data-i18n="rs_quota_users">تعداد کاربر</span>
+                  <b class="mono" id="myQuotaUsersText">-</b>
+                </div>
+                <div class="bar"><span id="myQuotaUsersBar" style="width:0%"></span></div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between small mb-8">
+                  <span data-i18n="rs_quota_traffic">حجم ترافیک</span>
+                  <b class="mono" id="myQuotaTrafficText">-</b>
+                </div>
+                <div class="bar"><span id="myQuotaTrafficBar" style="width:0%"></span></div>
+              </div>
+              <div class="small muted" data-i18n="rs_quota_hint">وقتی سهمیه پر شود، ساخت کاربر جدید متوقف می‌شود. برای افزایش سهمیه با مدیر پنل هماهنگ کنید.</div>
+            </div>
+          </div>
+
           <div class="col-4 win">
-            <div class="win-head"><h3><svg><use href="#icon-refresh"/></svg><span data-i18n="dash_ota_title">به‌روزرسانی پنل</span></h3></div>
+            <div class="win-head"><h3><svg><use href="#icon-bolt"/></svg><span data-i18n="dash_quick_title">دسترسی سریع</span></h3></div>
             <div class="win-body flex-col gap-12">
-              <div class="small muted">Current: <b class="mono" id="otaCurrent">-</b></div>
-              <div id="otaResult" class="small"></div>
-              <button class="btn btn-sm w-full" id="otaCheckBtn"><span data-i18n="dash_ota_check">بررسی نسخه جدید</span></button>
-              <button class="btn btn-primary btn-sm w-full" id="otaUpdateBtn" style="display:none;"><svg><use href="#icon-download"/></svg><span data-i18n="dash_ota_update_btn">به‌روزرسانی همین الان</span></button>
-              <div class="small muted" id="otaUpdateHint" style="display:none;" data-i18n="dash_ota_update_hint">داده‌ی کاربران هرگز در این فرآیند دست‌نخورده باقی می‌ماند.</div>
-              <hr>
+              <div data-owner-only class="flex-col gap-12" style="display:flex;">
+                <div class="small muted">Current: <b class="mono" id="otaCurrent">-</b></div>
+                <div id="otaResult" class="small"></div>
+                <button class="btn btn-sm w-full" id="otaCheckBtn"><span data-i18n="dash_ota_check">بررسی نسخه جدید</span></button>
+                <button class="btn btn-primary btn-sm w-full" id="otaUpdateBtn" style="display:none;"><svg><use href="#icon-download"/></svg><span data-i18n="dash_ota_update_btn">به‌روزرسانی همین الان</span></button>
+                <div class="small muted" id="otaUpdateHint" style="display:none;" data-i18n="dash_ota_update_hint">داده‌ی کاربران هرگز در این فرآیند دست‌نخورده باقی می‌ماند.</div>
+                <hr>
+              </div>
               <button class="btn btn-primary btn-sm w-full" id="quickAddBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="dash_quick_add">افزودن کاربر جدید</span></button>
               <button class="btn btn-sm w-full" id="quickBulkBtn"><svg><use href="#icon-layers"/></svg><span data-i18n="inb_bulk_create">ساخت گروهی</span></button>
             </div>
@@ -221,6 +252,42 @@
               <svg><use href="#icon-layers"/></svg>
               <div class="title" data-i18n="plans_empty">هنوز پلنی تعریف نشده</div>
               <div class="small" data-i18n="plans_empty_hint">مثلاً «۳۰ روز / ۵۰ گیگ / ۲ دستگاه»</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- ============ RESELLERS ============ -->
+      <section class="view" id="view-resellers">
+        <div class="win">
+          <div class="win-head">
+            <h3><svg><use href="#icon-reseller"/></svg><span data-i18n="rs_title">نمایندگان فروش</span></h3>
+            <div class="win-head-tools">
+              <button class="btn btn-primary btn-sm" id="addResellerBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="rs_add">نماینده جدید</span></button>
+            </div>
+          </div>
+          <div class="win-body no-pad">
+            <div class="small muted" style="padding:12px 16px; border-bottom:1px solid var(--border);" data-i18n="rs_hint">هر نماینده فقط کاربرهایی را می‌بیند که خودش ساخته و به تنظیمات پنل، لوکیشن‌ها و ربات‌ها دسترسی ندارد. سهمیه صفر یعنی بدون محدودیت.</div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="rs_username">نام کاربری</th>
+                    <th data-i18n="rs_status">وضعیت</th>
+                    <th data-i18n="rs_users">کاربران</th>
+                    <th data-i18n="rs_traffic">ترافیک</th>
+                    <th data-i18n="rs_note">توضیح</th>
+                    <th style="text-align:end;" data-i18n="inb_actions">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody id="resellersTableBody"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="resellersEmpty" style="display:none;">
+              <svg><use href="#icon-reseller"/></svg>
+              <div class="title" data-i18n="rs_empty">هنوز نماینده‌ای تعریف نشده</div>
+              <div class="small" data-i18n="rs_empty_hint">یک ورود جداگانه بسازید تا فروشنده بدون دسترسی به تنظیمات، کاربر بسازد</div>
             </div>
           </div>
         </div>
@@ -325,7 +392,7 @@
       <section class="view" id="view-security">
         <div class="grid">
           <div class="col-6 win">
-            <div class="win-head"><h3><svg><use href="#icon-key"/></svg><span data-i18n="sec_change_pass">تغییر نام کاربری / رمز عبور</span></h3></div>
+            <div class="win-head"><h3><svg><use href="#icon-key"/></svg><span id="secFormTitle" data-i18n="sec_change_pass">تغییر نام کاربری / رمز عبور</span></h3></div>
             <div class="win-body">
               <form id="securityForm">
                 <div class="field">
@@ -335,7 +402,7 @@
                     <input class="input" type="password" id="oldPassword" required autocomplete="current-password">
                   </div>
                 </div>
-                <div class="field">
+                <div class="field" data-owner-only>
                   <label data-i18n="sec_new_user">نام کاربری جدید</label>
                   <div class="input-wrap">
                     <svg class="input-icon"><use href="#icon-user-circle"/></svg>
@@ -362,7 +429,7 @@
             </div>
           </div>
 
-          <div class="col-6 win">
+          <div class="col-6 win" data-owner-only>
             <div class="win-head">
               <h3><svg><use href="#icon-lock"/></svg><span data-i18n="twofa_title">ورود دومرحله‌ای</span></h3>
               <span class="pill pill-muted" id="twofaBadge" data-i18n="twofa_off">غیرفعال</span>
@@ -384,7 +451,7 @@
             </div>
           </div>
 
-          <div class="col-12 win">
+          <div class="col-12 win" data-owner-only>
             <div class="win-head">
               <h3><svg><use href="#icon-clock"/></svg><span data-i18n="loginlog_title">تاریخچه ورود</span></h3>
               <button class="icon-btn btn-sm" id="loginLogRefresh" title="refresh"><svg><use href="#icon-refresh"/></svg></button>
@@ -981,6 +1048,54 @@
     <div class="modal-foot">
       <button class="btn btn-ghost" data-close-modal="planModal"><span data-i18n="cancel">انصراف</span></button>
       <button class="btn btn-primary" id="planSaveBtn"><span data-i18n="save">ذخیره</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: reseller ============ -->
+<div class="modal-overlay" id="resellerModal">
+  <div class="modal" style="max-width:460px;">
+    <div class="modal-head">
+      <h3 id="resellerModalTitle" data-i18n="rs_add">نماینده جدید</h3>
+      <button class="icon-btn" data-close-modal="resellerModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="resellerId">
+      <div class="field">
+        <label data-i18n="rs_username">نام کاربری</label>
+        <input class="input mono" type="text" id="resellerUsername" maxlength="32" autocomplete="off" placeholder="reseller_01">
+        <div class="small muted mt-8" data-i18n="rs_username_hint">فقط حروف انگلیسی، عدد و _ — بین ۳ تا ۳۲ نویسه. بعداً قابل تغییر نیست.</div>
+      </div>
+      <div class="field">
+        <label id="resellerPasswordLabel" data-i18n="rs_password">رمز عبور</label>
+        <input class="input mono" type="password" id="resellerPassword" autocomplete="new-password" placeholder="••••••••">
+        <div class="small muted mt-8" data-i18n="rs_password_hint">حداقل ۸ نویسه. با تغییر رمز، همه‌ی نشست‌های باز آن نماینده بسته می‌شود.</div>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label data-i18n="rs_max_users">سقف کاربر</label>
+          <input class="input" type="number" id="resellerMaxUsers" min="0" step="1" placeholder="0 = ∞">
+        </div>
+        <div class="field">
+          <label data-i18n="rs_max_traffic">سقف ترافیک (GB)</label>
+          <input class="input" type="number" id="resellerMaxTraffic" min="0" step="1" placeholder="0 = ∞">
+        </div>
+      </div>
+      <div class="field">
+        <label data-i18n="rs_note">توضیح</label>
+        <input class="input" type="text" id="resellerNote" maxlength="200" data-i18n-placeholder="rs_note_ph" placeholder="مثلاً: فروشگاه تهران">
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="title" data-i18n="rs_enabled">حساب فعال باشد</div>
+          <div class="hint" data-i18n="rs_enabled_hint">غیرفعال کردن، نماینده را بلافاصله بیرون می‌اندازد ولی کاربرانش سرجایشان می‌مانند.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="resellerEnabled" checked><span class="track"><span class="thumb"></span></span></label>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="resellerModal"><span data-i18n="cancel">انصراف</span></button>
+      <button class="btn btn-primary" id="resellerSaveBtn"><span data-i18n="save">ذخیره</span></button>
     </div>
   </div>
 </div>

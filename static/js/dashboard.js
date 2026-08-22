@@ -10,6 +10,8 @@
   let inbounds = [];
   let plans = [];
   let endpoints = [];
+  let resellers = [];
+  let isOwner = true;
   let lastHourly = [];
   let filterText = '';
   let filterStatus = '';
@@ -19,11 +21,23 @@
   const esc = PEYK.escapeHtml;
   const DAY = 86400;
 
+  /* Server error codes are kebab-case ("reseller-user-limit"); the ones worth
+     showing a human have an rs_err_* entry. t() echoes unknown keys straight
+     back, so the dictionary is probed directly rather than trusted to miss. */
+  function apiErrorText(detail) {
+    const key = 'rs_err_' + detail;
+    if (window.I18N && window.I18N[key]) return PEYK.t(key);
+    return detail || 'error';
+  }
+
   // ---------------- session guard + settings hydrate ----------------
   PEYK.api('/api/me').then(me => {
     if (!me.logged_in) { window.location.href = '/login'; return; }
     $('appVersion').textContent = me.app_version || '';
     $('otaCurrent').textContent = me.app_version || '-';
+    applyRole(me);
+    if (!isOwner) return;   // everything below this line is owner-only
+
     const s = me.settings || {};
     const set = (id, v) => { const el = $(id); if (el) el.value = v; };
     const check = (id, v) => { const el = $(id); if (el) el.checked = v; };
@@ -68,7 +82,52 @@
     set('settingBackupHours', s.auto_backup_hours != null ? s.auto_backup_hours : 6);
     set('settingNotifyDays', s.notify_expiry_days != null ? s.notify_expiry_days : 3);
     applyFragmentFieldState();
+    loadResellers();
+    loadEndpoints();
   }).catch(() => { window.location.href = '/login'; });
+
+  /* The server refuses these endpoints for a reseller regardless; hiding them
+     is so the panel does not offer buttons that can only fail. */
+  function applyRole(me) {
+    isOwner = me.role !== 'reseller';
+    document.querySelectorAll('[data-owner-only]').forEach(el => {
+      if (!isOwner) el.style.display = 'none';
+    });
+    document.querySelectorAll('[data-reseller-only]').forEach(el => {
+      el.style.display = isOwner ? 'none' : '';
+    });
+    if (!isOwner) {
+      document.body.classList.add('is-reseller');
+      renderMyQuota(me.quota, me.usage);
+      const badge = $('roleBadge');
+      if (badge) { badge.textContent = PEYK.t('rs_role_badge'); badge.style.display = ''; }
+      // The username half of that form is owner-only, so the heading would lie.
+      const secTitle = $('secFormTitle');
+      if (secTitle) {
+        secTitle.setAttribute('data-i18n', 'rs_change_pass');
+        secTitle.textContent = PEYK.t('rs_change_pass');
+      }
+    }
+  }
+
+  function renderMyQuota(quota, usage) {
+    if (!quota || !usage) return;
+    const unlimited = PEYK.t('unlimited');
+    const setBar = (id, used, cap) => {
+      const pct = cap ? Math.min(100, (used / cap) * 100) : 0;
+      const bar = $(id);
+      if (bar) bar.style.width = pct + '%';
+      return pct;
+    };
+    $('myQuotaUsersText').textContent = quota.max_users
+      ? `${usage.users} / ${quota.max_users}` : `${usage.users} / ${unlimited}`;
+    setBar('myQuotaUsersBar', usage.users, quota.max_users);
+
+    const usedGb = (usage.traffic_gb || 0).toFixed(2);
+    $('myQuotaTrafficText').textContent = quota.max_traffic_gb
+      ? `${usedGb} / ${quota.max_traffic_gb} GB` : `${usedGb} GB / ${unlimited}`;
+    setBar('myQuotaTrafficBar', usage.traffic_gb, quota.max_traffic_gb);
+  }
 
   $('settingSound').checked = PEYK.isSoundEnabled();
 
@@ -78,8 +137,8 @@
   const viewTitle = $('viewTitle');
   const titleKeys = {
     dashboard: 'nav_dashboard', inbounds: 'nav_inbounds', plans: 'nav_plans',
-    endpoints: 'nav_endpoints', traffic: 'nav_traffic', security: 'nav_security',
-    notifications: 'nav_notifications', settings: 'nav_settings',
+    resellers: 'nav_resellers', endpoints: 'nav_endpoints', traffic: 'nav_traffic',
+    security: 'nav_security', notifications: 'nav_notifications', settings: 'nav_settings',
   };
 
   function showView(name) {
@@ -89,8 +148,9 @@
     viewTitle.textContent = PEYK.t(titleKeys[name]);
     if (name === 'inbounds' || name === 'traffic') loadInbounds();
     if (name === 'plans') loadPlans();
+    if (name === 'resellers') loadResellers();
     if (name === 'endpoints') loadEndpoints();
-    if (name === 'security') { loadTwofaStatus(); loadLoginLog(); }
+    if (name === 'security' && isOwner) { loadTwofaStatus(); loadLoginLog(); }
     if (name === 'settings') { loadBackupStatus(); loadCleanupStatus(); }
     if (name === 'notifications') loadRenewRequests(false);
     if (name === 'notifications') loadUserbotStatus();
@@ -118,7 +178,7 @@
     b.addEventListener('click', () => {
       PEYK.setLang(b.dataset.lang);
       viewTitle.textContent = PEYK.t(viewTitle.getAttribute('data-i18n'));
-      renderInbounds(); renderTrafficTable(); renderPlans();
+      renderInbounds(); renderTrafficTable(); renderPlans(); renderResellers();
       PEYK.playSfx('toggle', 0.25);
     });
   });
@@ -175,7 +235,8 @@
       $('trafficUp').textContent = PEYK.fmtBytes(s.total_up || 0);
       $('trafficDown').textContent = PEYK.fmtBytes(s.total_down || 0);
       lastHourly = s.hourly || [];
-      renderTrafficChart($('trafficChart'), lastHourly);
+      if (isOwner) renderTrafficChart($('trafficChart'), lastHourly);
+      else renderMyQuota(s.quota, s.usage);
     } catch (e) {
       if (e.status === 401) window.location.href = '/login';
     }
@@ -488,7 +549,7 @@
       closeModal('inboundModal');
       loadInbounds();
     } catch (e) {
-      PEYK.toast(e.detail || 'error', 'error');
+      PEYK.toast(apiErrorText(e.detail), 'error');
     } finally { PEYK.setLoading(btn, false); }
   });
 
@@ -542,7 +603,7 @@
       closeModal('bulkModal');
       loadInbounds();
     } catch (e) {
-      PEYK.toast(e.detail || 'error', 'error');
+      PEYK.toast(apiErrorText(e.detail), 'error');
     } finally { PEYK.setLoading(btn, false); }
   });
 
@@ -633,6 +694,133 @@
       loadPlans();
     } catch (e) {
       PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+
+  // ---------------- resellers ----------------
+  async function loadResellers() {
+    if (!isOwner) return;
+    try {
+      const r = await PEYK.api('/api/resellers');
+      resellers = r.resellers || [];
+      renderResellers();
+      $('navResellerCount').textContent = resellers.length;
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function renderResellers() {
+    const tbody = $('resellersTableBody');
+    if (!tbody) return;
+    $('resellersEmpty').style.display = resellers.length ? 'none' : 'block';
+    tbody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    const unlimited = PEYK.t('unlimited');
+    resellers.forEach(r => {
+      const on = r.enabled !== false;
+      const users = r.max_users ? `${r.users} / ${r.max_users}` : `${r.users} / ${unlimited}`;
+      const traffic = r.max_traffic_gb
+        ? `${r.used_gb} / ${r.max_traffic_gb} GB`
+        : `${r.used_gb} GB`;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td data-label="${esc(PEYK.t('rs_username'))}"><b class="mono">${esc(r.username)}</b></td>
+        <td data-label="${esc(PEYK.t('rs_status'))}">
+          <span class="pill ${on ? 'pill-on' : 'pill-off'}"><span class="pill-dot"></span>${esc(PEYK.t(on ? 'active' : 'inactive'))}</span>
+        </td>
+        <td data-label="${esc(PEYK.t('rs_users'))}" class="mono small">${esc(users)}</td>
+        <td data-label="${esc(PEYK.t('rs_traffic'))}" class="mono small">${esc(traffic)}</td>
+        <td data-label="${esc(PEYK.t('rs_note'))}" class="small muted">${esc(r.note || '-')}</td>
+        <td data-label="${esc(PEYK.t('inb_actions'))}">
+          <div class="row-actions">
+            <button class="icon-btn btn-sm" data-rs-action="toggle" data-id="${esc(r.id)}" title="${esc(PEYK.t(on ? 'bulk_disable' : 'bulk_enable'))}"><svg><use href="#icon-power"/></svg></button>
+            <button class="icon-btn btn-sm" data-rs-action="edit" data-id="${esc(r.id)}" title="${esc(PEYK.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
+            <button class="icon-btn btn-sm" data-rs-action="delete" data-id="${esc(r.id)}" title="${esc(PEYK.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
+          </div>
+        </td>`;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+  }
+
+  $('resellersTableBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-rs-action]');
+    if (!btn) return;
+    const rs = resellers.find(r => r.id === btn.dataset.id);
+    if (!rs) return;
+    const action = btn.dataset.rsAction;
+
+    if (action === 'edit') return openResellerModal(rs);
+
+    if (action === 'toggle') {
+      try {
+        await PEYK.api(`/api/resellers/${rs.id}`, {
+          method: 'PATCH', body: { enabled: rs.enabled === false },
+        });
+        PEYK.toast(PEYK.t('settings_saved'), 'success');
+        loadResellers();
+      } catch (err) { PEYK.toast(err.detail || 'error', 'error'); }
+      return;
+    }
+
+    // Deleting the account is the reversible half; deleting the customers it
+    // sold to is not, so that is a second, explicit answer.
+    if (!confirm(PEYK.t('rs_delete_confirm').replace('{name}', rs.username))) return;
+    let dropUsers = false;
+    if (rs.users > 0) {
+      dropUsers = confirm(PEYK.t('rs_delete_users_confirm').replace('{n}', rs.users));
+    }
+    try {
+      await PEYK.api(`/api/resellers/${rs.id}?delete_users=${dropUsers ? 1 : 0}`, { method: 'DELETE' });
+      PEYK.toast(PEYK.t('rs_deleted'), 'success');
+      loadResellers();
+      loadInbounds();
+    } catch (err) { PEYK.toast(err.detail || 'error', 'error'); }
+  });
+
+  function openResellerModal(rs = null) {
+    $('resellerModalTitle').textContent = rs ? PEYK.t('rs_edit') : PEYK.t('rs_add');
+    $('resellerId').value = rs ? rs.id : '';
+    $('resellerUsername').value = rs ? rs.username : '';
+    $('resellerUsername').disabled = !!rs;
+    $('resellerPassword').value = '';
+    $('resellerPasswordLabel').textContent = PEYK.t(rs ? 'rs_password_change' : 'rs_password');
+    $('resellerMaxUsers').value = rs ? (rs.max_users || '') : '';
+    $('resellerMaxTraffic').value = rs ? (rs.max_traffic_gb || '') : '';
+    $('resellerNote').value = rs ? (rs.note || '') : '';
+    $('resellerEnabled').checked = rs ? rs.enabled !== false : true;
+    openModal('resellerModal');
+  }
+  $('addResellerBtn').addEventListener('click', () => openResellerModal());
+
+  $('resellerSaveBtn').addEventListener('click', async () => {
+    const id = $('resellerId').value;
+    const password = $('resellerPassword').value;
+    const body = {
+      max_users: num('resellerMaxUsers'),
+      max_traffic_gb: num('resellerMaxTraffic'),
+      note: $('resellerNote').value.trim(),
+      enabled: $('resellerEnabled').checked,
+    };
+    if (!id) {
+      body.username = $('resellerUsername').value.trim();
+      if (!/^[a-zA-Z0-9_]{3,32}$/.test(body.username)) {
+        PEYK.toast(PEYK.t('rs_bad_username'), 'error'); return;
+      }
+    }
+    if (password) body.password = password;
+    if (!id && password.length < 8) { PEYK.toast(PEYK.t('rs_weak_password'), 'error'); return; }
+
+    const btn = $('resellerSaveBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      if (id) await PEYK.api(`/api/resellers/${id}`, { method: 'PATCH', body });
+      else await PEYK.api('/api/resellers', { method: 'POST', body });
+      PEYK.toast(PEYK.t('settings_saved'), 'success');
+      closeModal('resellerModal');
+      loadResellers();
+    } catch (e) {
+      PEYK.toast(apiErrorText(e.detail), 'error');
     } finally { PEYK.setLoading(btn, false); }
   });
 
@@ -1294,7 +1482,7 @@
       await loadInbounds();
       showLinks(r.inbound.uid);
     } catch (e) {
-      const msg = e.detail === 'trial-disabled' ? PEYK.t('trial_disabled') : (e.detail || 'error');
+      const msg = e.detail === 'trial-disabled' ? PEYK.t('trial_disabled') : apiErrorText(e.detail);
       PEYK.toast(msg, 'error');
     } finally { PEYK.setLoading(btn, false); }
   });
@@ -1526,7 +1714,8 @@
   });
 
   // ---------------- boot ----------------
+  // Endpoints and the settings hydrate are owner-only, so they are kicked off
+  // from the /api/me handler once the role is known.
   loadInbounds();
   loadPlans();
-  loadEndpoints();
 })();
