@@ -105,7 +105,7 @@ def test_clash_output_is_valid_yaml(client):
     add_ep(client, name="Germany", address="de.example.com", sort=1)
     add_ep(client, name="Finland", address="fi.example.com", port=2053, sort=2)
 
-    r = client.get(f"/sub/{ib['uid']}?format=clash")
+    r = client.get(f"/sub/{ib['sub_token']}?format=clash")
     assert r.status_code == 200
     assert r.headers["X-Subscription-Format"] == "clash"
     assert "yaml" in r.headers["content-type"]
@@ -132,7 +132,7 @@ def test_clash_group_covers_every_endpoint(client):
     add_ep(client, name="B", address="b.example.com", sort=2)
     add_ep(client, name="C", address="c.example.com", sort=3)
 
-    doc = yaml.safe_load(client.get(f"/sub/{ib['uid']}?format=clash").text)
+    doc = yaml.safe_load(client.get(f"/sub/{ib['sub_token']}?format=clash").text)
     groups = {g["name"]: g for g in doc["proxy-groups"]}
     proxy_names = [p["name"] for p in doc["proxies"]]
 
@@ -149,7 +149,7 @@ def test_clash_survives_persian_and_special_names(client):
     ib = make_user(client, name="علی رضایی")
     add_ep(client, name='آلمان "یک": CF', address="de.example.com")
 
-    doc = yaml.safe_load(client.get(f"/sub/{ib['uid']}?format=clash").text)
+    doc = yaml.safe_load(client.get(f"/sub/{ib['sub_token']}?format=clash").text)
     name = doc["proxies"][0]["name"]
     assert "علی رضایی" in name
     assert 'آلمان "یک": CF' in name
@@ -164,7 +164,7 @@ def test_clash_deduplicates_proxy_names(client):
     add_ep(client, name="Same", address="a.example.com", sort=1)
     add_ep(client, name="Same", address="b.example.com", sort=2)
 
-    doc = yaml.safe_load(client.get(f"/sub/{ib['uid']}?format=clash").text)
+    doc = yaml.safe_load(client.get(f"/sub/{ib['sub_token']}?format=clash").text)
     names = [p["name"] for p in doc["proxies"]]
     assert len(set(names)) == 2, f"names collided: {names}"
 
@@ -172,7 +172,7 @@ def test_clash_deduplicates_proxy_names(client):
 def test_clash_host_header_for_bare_ip(client):
     ib = make_user(client)
     add_ep(client, name="CF", address="104.16.1.1", host="panel.example.com")
-    doc = yaml.safe_load(client.get(f"/sub/{ib['uid']}?format=clash").text)
+    doc = yaml.safe_load(client.get(f"/sub/{ib['sub_token']}?format=clash").text)
     p = doc["proxies"][0]
     assert p["server"] == "104.16.1.1"
     assert p["ws-opts"]["headers"]["Host"] == "panel.example.com"
@@ -185,7 +185,7 @@ def test_singbox_output_is_valid_json(client):
     add_ep(client, name="Germany", address="de.example.com", sort=1)
     add_ep(client, name="Finland", address="fi.example.com", sort=2)
 
-    r = client.get(f"/sub/{ib['uid']}?format=singbox")
+    r = client.get(f"/sub/{ib['sub_token']}?format=singbox")
     assert r.status_code == 200
     assert r.headers["X-Subscription-Format"] == "singbox"
     assert "json" in r.headers["content-type"]
@@ -207,7 +207,7 @@ def test_singbox_urltest_and_selector_reference_real_tags(client):
     add_ep(client, name="A", address="a.example.com", sort=1)
     add_ep(client, name="B", address="b.example.com", sort=2)
 
-    doc = json.loads(client.get(f"/sub/{ib['uid']}?format=singbox").text)
+    doc = json.loads(client.get(f"/sub/{ib['sub_token']}?format=singbox").text)
     tags = {o["tag"] for o in doc["outbounds"]}
     urltest = next(o for o in doc["outbounds"] if o["type"] == "urltest")
     selector = next(o for o in doc["outbounds"] if o["type"] == "selector")
@@ -222,7 +222,7 @@ def test_singbox_random_fingerprint_is_mapped(client):
     """utls has no "random" fingerprint; sending it fails validation."""
     ib = make_user(client, fp="random")
     add_ep(client, name="A", address="a.example.com")
-    doc = json.loads(client.get(f"/sub/{ib['uid']}?format=singbox").text)
+    doc = json.loads(client.get(f"/sub/{ib['sub_token']}?format=singbox").text)
     o = next(x for x in doc["outbounds"] if x["type"] == "vless")
     assert o["tls"]["utls"]["fingerprint"] != "random"
 
@@ -230,7 +230,7 @@ def test_singbox_random_fingerprint_is_mapped(client):
 def test_singbox_persian_names(client):
     ib = make_user(client, name="علی")
     add_ep(client, name="آلمان", address="de.example.com")
-    doc = json.loads(client.get(f"/sub/{ib['uid']}?format=singbox").text)
+    doc = json.loads(client.get(f"/sub/{ib['sub_token']}?format=singbox").text)
     tags = [o["tag"] for o in doc["outbounds"] if o["type"] == "vless"]
     assert any("علی" in t and "آلمان" in t for t in tags)
 
@@ -241,8 +241,8 @@ def test_base64_decodes_to_the_plain_list(client):
     add_ep(client, name="A", address="a.example.com", sort=1)
     add_ep(client, name="B", address="b.example.com", sort=2)
 
-    plain = client.get(f"/sub/{ib['uid']}?format=plain").text
-    encoded = client.get(f"/sub/{ib['uid']}?format=base64").text
+    plain = client.get(f"/sub/{ib['sub_token']}?format=plain").text
+    encoded = client.get(f"/sub/{ib['sub_token']}?format=base64").text
     assert base64.b64decode(encoded).decode("utf-8") == plain
     assert plain.count("vless://") == 2
 
@@ -250,9 +250,9 @@ def test_base64_decodes_to_the_plain_list(client):
 def test_base64_is_opt_in_only(client):
     """Reachable by explicit request, never by sniffing."""
     ib = make_user(client)
-    r = client.get(f"/sub/{ib['uid']}", headers={"User-Agent": "v2rayNG/1.8.5"})
+    r = client.get(f"/sub/{ib['sub_token']}", headers={"User-Agent": "v2rayNG/1.8.5"})
     assert r.headers["X-Subscription-Format"] == "plain"
-    r = client.get(f"/sub/{ib['uid']}?format=base64")
+    r = client.get(f"/sub/{ib['sub_token']}?format=base64")
     assert r.headers["X-Subscription-Format"] == "base64"
 
 
@@ -260,7 +260,7 @@ def test_plain_remains_the_default(client):
     """Existing subscriptions must not change dialect under anyone's feet."""
     ib = make_user(client)
     add_ep(client, name="A", address="a.example.com")
-    r = client.get(f"/sub/{ib['uid']}")
+    r = client.get(f"/sub/{ib['sub_token']}")
     assert r.headers["X-Subscription-Format"] == "plain"
     assert r.text.startswith("vless://")
 
@@ -269,11 +269,11 @@ def test_user_agent_switches_format_without_a_query_param(client):
     ib = make_user(client)
     add_ep(client, name="A", address="a.example.com")
 
-    r = client.get(f"/sub/{ib['uid']}", headers={"User-Agent": "clash-verge/1.5"})
+    r = client.get(f"/sub/{ib['sub_token']}", headers={"User-Agent": "clash-verge/1.5"})
     assert r.headers["X-Subscription-Format"] == "clash"
     assert yaml.safe_load(r.text)["proxies"]
 
-    r = client.get(f"/sub/{ib['uid']}", headers={"User-Agent": "SFI/1.9"})
+    r = client.get(f"/sub/{ib['sub_token']}", headers={"User-Agent": "SFI/1.9"})
     assert r.headers["X-Subscription-Format"] == "singbox"
     assert json.loads(r.text)["outbounds"]
 
@@ -282,7 +282,7 @@ def test_user_agent_switches_format_without_a_query_param(client):
 @pytest.mark.parametrize("fmt", ["plain", "base64", "clash", "singbox"])
 def test_every_format_carries_userinfo_and_survives_no_endpoints(client, fmt):
     ib = make_user(client, name="Ali", quota_gb=7)
-    r = client.get(f"/sub/{ib['uid']}?format={fmt}")
+    r = client.get(f"/sub/{ib['sub_token']}?format={fmt}")
     assert r.status_code == 200
     assert f"total={7 * 1024 ** 3}" in r.headers["Subscription-Userinfo"]
     assert r.text.strip()
@@ -298,5 +298,5 @@ def test_unknown_uid_404s_in_every_format(client, fmt):
 ])
 def test_filename_extension_matches_format(client, fmt, ext):
     ib = make_user(client)
-    r = client.get(f"/sub/{ib['uid']}?format={fmt}")
+    r = client.get(f"/sub/{ib['sub_token']}?format={fmt}")
     assert f'.{ext}"' in r.headers["Content-Disposition"]

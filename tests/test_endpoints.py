@@ -85,7 +85,7 @@ def test_endpoint_validation(client):
 def test_no_endpoints_keeps_single_config(client):
     """Existing installs must see no change until they configure endpoints."""
     ib = make_user(client)
-    body = client.get(f"/sub/{ib['uid']}").text
+    body = client.get(f"/sub/{ib['sub_token']}").text
     assert body.count("vless://") == 1
     assert body.startswith("vless://")
 
@@ -96,7 +96,7 @@ def test_subscription_emits_one_config_per_endpoint(client):
     add_ep(client, name="Finland", address="fi.example.com", sort=2)
     add_ep(client, name="Cloudflare", address="104.16.1.1", sort=3)
 
-    lines = [ln for ln in client.get(f"/sub/{ib['uid']}").text.splitlines() if ln.strip()]
+    lines = [ln for ln in client.get(f"/sub/{ib['sub_token']}").text.splitlines() if ln.strip()]
     assert len(lines) == 3
     assert all(ln.startswith("vless://") for ln in lines)
     # sort order is respected and each carries its own remark
@@ -115,7 +115,7 @@ def test_disabled_endpoint_is_excluded(client):
     client.patch(f"/api/endpoints/{off['id']}",
                  json={"name": "Dead", "address": "dead.example.com", "enabled": False})
 
-    body = client.get(f"/sub/{ib['uid']}").text
+    body = client.get(f"/sub/{ib['sub_token']}").text
     assert "live.example.com" in body
     assert "dead.example.com" not in body
 
@@ -126,7 +126,7 @@ def test_bare_ip_endpoint_keeps_routing_host(client):
     ib = make_user(client)
     add_ep(client, name="CF", address="104.16.1.1", host="panel.example.com")
 
-    line = client.get(f"/sub/{ib['uid']}").text.strip()
+    line = client.get(f"/sub/{ib['sub_token']}").text.strip()
     assert line.startswith("vless://")
     assert "@104.16.1.1:443?" in line
     assert "host=panel.example.com" in line
@@ -138,7 +138,7 @@ def test_per_endpoint_sni_and_port(client):
     ib = make_user(client)
     add_ep(client, name="Fronted", address="cdn.example.com",
            host="panel.example.com", sni="fronting.example.com", port=2053)
-    line = client.get(f"/sub/{ib['uid']}").text.strip()
+    line = client.get(f"/sub/{ib['sub_token']}").text.strip()
     assert "@cdn.example.com:2053?" in line
     assert "sni=fronting.example.com" in line
     assert "host=panel.example.com" in line
@@ -148,7 +148,7 @@ def test_per_endpoint_fingerprint_overrides_default(client):
     ib = make_user(client, fp="chrome")
     add_ep(client, name="Edge", address="a.example.com", fp="firefox")
     add_ep(client, name="Plain", address="b.example.com", sort=2)
-    lines = client.get(f"/sub/{ib['uid']}").text.splitlines()
+    lines = client.get(f"/sub/{ib['sub_token']}").text.splitlines()
     assert "fp=firefox" in lines[0]
     assert "fp=chrome" in lines[1]
 
@@ -168,7 +168,7 @@ def test_links_api_returns_all_configs(client):
 def test_json_subscription_includes_configs(client):
     ib = make_user(client)
     add_ep(client, name="A", address="a.example.com")
-    body = client.get(f"/sub/{ib['uid']}/json").json()
+    body = client.get(f"/sub/{ib['sub_token']}/json").json()
     assert len(body["links"]["configs"]) == 1
     assert body["links"]["tls"].startswith("vless://")
 
@@ -177,7 +177,7 @@ def test_userinfo_header_survives_multi_endpoint(client):
     ib = make_user(client, quota_gb=3)
     add_ep(client, name="A", address="a.example.com")
     add_ep(client, name="B", address="b.example.com")
-    info = client.get(f"/sub/{ib['uid']}").headers["Subscription-Userinfo"]
+    info = client.get(f"/sub/{ib['sub_token']}").headers["Subscription-Userinfo"]
     assert f"total={3 * 1024 ** 3}" in info
 
 
@@ -238,7 +238,7 @@ def test_persian_user_name_does_not_break_subscription(client):
     ib = make_user(client, name="علی رضایی")
     add_ep(client, name="آلمان", address="de.example.com")
 
-    r = client.get(f"/sub/{ib['uid']}")
+    r = client.get(f"/sub/{ib['sub_token']}")
     assert r.status_code == 200
     assert r.text.count("vless://") == 1
     # the header is transported base64-encoded rather than dropped or mangled
@@ -250,7 +250,7 @@ def test_persian_user_name_does_not_break_subscription(client):
 
 def test_ascii_name_keeps_plain_title(client):
     ib = make_user(client, name="Ali")
-    title = client.get(f"/sub/{ib['uid']}").headers["Profile-Title"]
+    title = client.get(f"/sub/{ib['sub_token']}").headers["Profile-Title"]
     assert not title.startswith("base64:")
     assert title.endswith("-Ali")
 
@@ -259,10 +259,10 @@ def test_ascii_name_keeps_plain_title(client):
 def test_subscription_survives_any_name(client, name):
     ib = make_user(client, name=name)
     add_ep(client, name=name, address="x.example.com")
-    r = client.get(f"/sub/{ib['uid']}")
+    r = client.get(f"/sub/{ib['sub_token']}")
     assert r.status_code == 200, f"{name!r} broke the subscription"
     assert r.text.startswith("vless://")
-    assert client.get(f"/sub/{ib['uid']}/json").status_code == 200
+    assert client.get(f"/sub/{ib['sub_token']}/json").status_code == 200
     assert client.get(f"/api/inbounds/{ib['uid']}/qr").status_code == 200
 
 
@@ -270,6 +270,6 @@ def test_non_ascii_endpoint_name_in_remark(client):
     ib = make_user(client, name="Ali")
     add_ep(client, name="آلمان — کلادفلر", address="de.example.com")
     import urllib.parse
-    line = client.get(f"/sub/{ib['uid']}").text.strip()
+    line = client.get(f"/sub/{ib['sub_token']}").text.strip()
     remark = urllib.parse.unquote(line.split("#")[-1])
     assert "آلمان — کلادفلر" in remark

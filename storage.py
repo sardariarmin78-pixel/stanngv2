@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 10  # v10: renewal requests from the bot
+SCHEMA_VERSION = 11  # v11: rotatable subscription tokens, health checks
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -111,6 +111,11 @@ DEFAULT_DB: Dict[str, Any] = {
         # button. Off by default because it messages the admin.
         "userbot_renew_enabled": False,
         "userbot_renew_options": [30, 60, 90],
+        # ---- endpoint health monitoring ----
+        "health_check_enabled": False,
+        "health_interval_minutes": 15,
+        "health_fail_threshold": 3,   # consecutive failures before alerting
+        "health_auto_disable": False, # drop a dead endpoint out of subscriptions
         # ---- retention: expired accounts otherwise pile up forever ----
         "cleanup_enabled": False,
         "cleanup_disable_days": 3,   # days past expiry before disabling
@@ -330,6 +335,13 @@ def normalize_db(db: Dict[str, Any]) -> bool:
             if ib.get("expire_at") is not None:
                 ib["expire_at"] = None
                 changed = True
+        # The subscription URL used to be keyed by uid, which is also the
+        # WebSocket path. Existing installs therefore start with the token
+        # equal to the uid so no link breaks; rotating it later kills the old
+        # URL without touching the client's working config.
+        if not ib.get("sub_token"):
+            ib["sub_token"] = ib["uid"]
+            changed = True
         # Daily traffic buckets: [{"d": "YYYY-MM-DD", "up": n, "down": n}]
         if not isinstance(ib.get("history"), list):
             ib["history"] = []
