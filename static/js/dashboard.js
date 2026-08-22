@@ -12,6 +12,7 @@
   let endpoints = [];
   let resellers = [];
   let isOwner = true;
+  let sharingThreshold = 0;
   let lastHourly = [];
   let filterText = '';
   let filterStatus = '';
@@ -59,6 +60,10 @@
     set('settingHealthInterval', s.health_interval_minutes != null ? s.health_interval_minutes : 15);
     set('settingHealthThreshold', s.health_fail_threshold != null ? s.health_fail_threshold : 3);
     check('settingHealthAutoDisable', !!s.health_auto_disable);
+    check('settingSharingEnabled', !!s.sharing_detect_enabled);
+    set('settingSharingWindow', s.sharing_window_hours != null ? s.sharing_window_hours : 24);
+    set('settingSharingThreshold', s.sharing_threshold != null ? s.sharing_threshold : 4);
+    check('settingSharingAutoDisable', !!s.sharing_auto_disable);
     set('settingIdleTimeout', s.idle_timeout_seconds != null ? s.idle_timeout_seconds : 600);
     set('settingHistoryDays', s.history_days != null ? s.history_days : 30);
     set('settingBotToken', s.telegram_bot_token || '');
@@ -324,6 +329,7 @@
     try {
       const r = await PEYK.api('/api/inbounds');
       inbounds = r.inbounds || [];
+      sharingThreshold = r.sharing_threshold || 0;
       // Drop selections for rows that no longer exist.
       const live = new Set(inbounds.map(i => i.uid));
       [...selected].forEach(uid => { if (!live.has(uid)) selected.delete(uid); });
@@ -346,6 +352,24 @@
     if (st.request_exceeded) return { key: 'status_requests_over', cls: 'pill-off' };
     if (st.disabled) return { key: 'inb_disabled_manual', cls: 'pill-muted' };
     return { key: 'inactive', cls: 'pill-off' };
+  }
+
+  /* Shown only once detection is on, so the column does not carry a
+     permanently empty slot for panels that never enable it. */
+  function sharingBadge(ib) {
+    if (!sharingThreshold || !ib.sharing) return '';
+    const n = ib.sharing.networks || 0;
+    // Judged on the count, not on sharing_flagged: the flag is only set by the
+    // sweep, and the row should not read "fine" for the 15 minutes until it runs.
+    if (n >= sharingThreshold) {
+      return ` <span class="pill pill-off" title="${esc(PEYK.t('shr_flag_title'))}">`
+        + `<span class="pill-dot"></span>${esc(PEYK.t('shr_flag'))} ${n}</span>`;
+    }
+    // A near miss is worth seeing before it trips.
+    if (n >= sharingThreshold - 1) {
+      return ` <span class="pill pill-warn" title="${esc(PEYK.t('shr_near_title'))}">${n}</span>`;
+    }
+    return '';
   }
 
   function usageClass(pct) {
@@ -390,7 +414,7 @@
       tr.className = selected.has(ib.uid) ? 'is-selected' : '';
       tr.innerHTML = `
         <td class="col-check" data-label=""><input type="checkbox" class="checkbox row-check" data-uid="${esc(ib.uid)}" ${selected.has(ib.uid) ? 'checked' : ''} aria-label="select"></td>
-        <td data-label="${esc(PEYK.t('inb_name'))}"><b>${esc(ib.name)}</b>${ib.note ? `<div class="small muted">${esc(ib.note)}</div>` : ''}</td>
+        <td data-label="${esc(PEYK.t('inb_name'))}"><b>${esc(ib.name)}</b>${sharingBadge(ib)}${ib.note ? `<div class="small muted">${esc(ib.note)}</div>` : ''}</td>
         <td data-label="${esc(PEYK.t('inb_status'))}"><span class="pill ${label.cls}"><span class="pill-dot"></span>${esc(PEYK.t(label.key))}</span></td>
         <td data-label="${esc(PEYK.t('inb_usage'))}" style="min-width:150px;">
           <div class="small mono">${esc(quotaTxt)}</div>
@@ -402,6 +426,7 @@
           <div class="row-actions">
             <button class="icon-btn btn-sm" data-action="links" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_links'))}"><svg><use href="#icon-qr"/></svg></button>
             <button class="icon-btn btn-sm" data-action="history" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('traffic_history'))}"><svg><use href="#icon-chart"/></svg></button>
+            ${sharingThreshold ? `<button class="icon-btn btn-sm" data-action="networks" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('shr_modal_title'))}"><svg><use href="#icon-globe"/></svg></button>` : ''}
             <button class="icon-btn btn-sm" data-action="edit" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
             <button class="icon-btn btn-sm" data-action="renew" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_renew'))}"><svg><use href="#icon-clock"/></svg></button>
             <button class="icon-btn btn-sm" data-action="reset" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_reset_usage'))}"><svg><use href="#icon-refresh"/></svg></button>
@@ -692,6 +717,85 @@
       PEYK.toast(PEYK.t('settings_saved'), 'success');
       closeModal('planModal');
       loadPlans();
+    } catch (e) {
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+
+  // ---------------- anti-sharing ----------------
+  $('saveSharingBtn').addEventListener('click', () => {
+    saveSettings('saveSharingBtn', {
+      sharing_detect_enabled: $('settingSharingEnabled').checked,
+      sharing_window_hours: parseInt($('settingSharingWindow').value, 10) || 24,
+      sharing_threshold: parseInt($('settingSharingThreshold').value, 10) || 4,
+      sharing_auto_disable: $('settingSharingAutoDisable').checked,
+    });
+  });
+
+  $('sharingCheckBtn').addEventListener('click', async () => {
+    const btn = $('sharingCheckBtn'), el = $('sharingResult');
+    PEYK.setLoading(btn, true);
+    el.textContent = '';
+    try {
+      const r = await PEYK.api('/api/sharing/check', { method: 'POST' });
+      if (!r.flagged.length) {
+        el.innerHTML = `<span class="pill pill-on"><span class="pill-dot"></span>${esc(PEYK.t('shr_none'))}</span>`;
+      } else {
+        const names = r.flagged.map(f => `${esc(f.name)} (${f.networks})`).join('، ');
+        el.innerHTML = `<span class="pill pill-off"><span class="pill-dot"></span>${esc(PEYK.t('shr_found').replace('{n}', r.flagged.length))}</span> <span class="muted">${names}</span>`;
+      }
+      loadInbounds();
+    } catch (e) {
+      el.textContent = e.detail === 'sharing-disabled' ? PEYK.t('shr_disabled') : (e.detail || 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+  // ---------------- where a subscription was used ----------------
+  let networksModalUid = null;
+
+  async function showNetworks(uid) {
+    networksModalUid = uid;
+    const tbody = $('networksTableBody');
+    tbody.innerHTML = '';
+    $('networksSummary').textContent = PEYK.t('loading');
+    openModal('networksModal');
+    try {
+      const r = await PEYK.api(`/api/inbounds/${uid}/networks`);
+      if (!r.recent.length) {
+        $('networksSummary').textContent = PEYK.t('shr_never_used');
+        return;
+      }
+      $('networksSummary').innerHTML = PEYK.t('shr_summary')
+        .replace('{nets}', `<b>${r.networks}</b>`)
+        .replace('{ips}', `<b>${r.ips}</b>`)
+        .replace('{hours}', `<b>${r.window_hours}</b>`)
+        .replace('{limit}', `<b>${r.threshold}</b>`);
+      const frag = document.createDocumentFragment();
+      r.recent.forEach(e => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td data-label="${esc(PEYK.t('shr_ip'))}" class="mono small">${esc(e.ip)}</td>
+          <td data-label="${esc(PEYK.t('shr_network'))}" class="mono small muted">${esc(e.network)}</td>
+          <td data-label="${esc(PEYK.t('shr_last'))}" class="small muted" style="text-align:end;">${esc(PEYK.fmtAgo(e.last))}</td>`;
+        frag.appendChild(tr);
+      });
+      tbody.appendChild(frag);
+    } catch (e) {
+      $('networksSummary').textContent = e.detail || 'error';
+    }
+  }
+
+  $('clearFlagBtn').addEventListener('click', async () => {
+    if (!networksModalUid) return;
+    if (!confirm(PEYK.t('shr_clear_confirm'))) return;
+    const btn = $('clearFlagBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      await PEYK.api(`/api/inbounds/${networksModalUid}/clear-flag`, { method: 'POST' });
+      PEYK.toast(PEYK.t('shr_cleared'), 'success');
+      closeModal('networksModal');
+      loadInbounds();
     } catch (e) {
       PEYK.toast(e.detail || 'error', 'error');
     } finally { PEYK.setLoading(btn, false); }
@@ -1025,6 +1129,7 @@
 
   // ---------------- row actions ----------------
   async function handleAction(action, uid) {
+    if (action === 'networks') return showNetworks(uid);
     const ib = inbounds.find(x => x.uid === uid);
     if (!ib) return;
     if (action === 'edit') return openInboundModal(ib);

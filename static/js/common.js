@@ -223,6 +223,16 @@ const PEYK = (() => {
     return parts.join(' ');
   }
 
+  /* "3h ago" rather than a timestamp: for a log of where an account was
+     used, recency is the only part anyone reads. */
+  function fmtAgo(epochSeconds) {
+    const secs = Math.max(0, Date.now() / 1000 - epochSeconds);
+    if (secs < 60) return t('ago_now');
+    if (secs < 3600) return t('ago_minutes').replace('{n}', Math.floor(secs / 60));
+    if (secs < 86400) return t('ago_hours').replace('{n}', Math.floor(secs / 3600));
+    return t('ago_days').replace('{n}', Math.floor(secs / 86400));
+  }
+
   function initLangThemeToggles(onChange) {
     document.querySelectorAll('.lang-toggle button').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -261,7 +271,7 @@ const PEYK = (() => {
     getTheme, setTheme, applyStoredTheme,
     getLang, setLang, t, translatePage,
     toast, api, initRipples, attachRipple, initSparkles,
-    setLoading, shake, fmtBytes, fmtDuration, escapeHtml,
+    setLoading, shake, fmtBytes, fmtDuration, fmtAgo, escapeHtml,
   };
 })();
 

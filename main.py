@@ -52,7 +52,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 
 
 def _env_raw(name: str):
@@ -134,6 +134,9 @@ runtime = {
     "active": {},
     "pending_traffic": {},
     "pending_requests": {},
+    # uid -> {ip: last-seen epoch}, folded into the db by the same flush that
+    # handles bytes. Recording inline would write db.json on every connect.
+    "pending_ips": {},
     "colo": {"value": None, "at": 0.0},
     # chat id -> [request timestamps]; in memory only, so a restart forgives.
     "bot_rate": {},
@@ -208,6 +211,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_userbot_loop()),
         asyncio.create_task(_cleanup_loop()),
         asyncio.create_task(_health_loop()),
+        asyncio.create_task(_sharing_loop()),
     ]
     try:
         yield
@@ -590,10 +594,12 @@ async def _fold_pending_traffic():
     """
     traffic = runtime["pending_traffic"]
     requests_ = runtime["pending_requests"]
-    if not traffic and not requests_:
+    seen_ips = runtime["pending_ips"]
+    if not traffic and not requests_ and not seen_ips:
         return
     runtime["pending_traffic"] = {}
     runtime["pending_requests"] = {}
+    runtime["pending_ips"] = {}
     # Clear our published slice too: the bytes are about to land in the db,
     # and leaving them in the journal would let a sibling count them again.
     j = _journal()
@@ -628,6 +634,11 @@ async def _fold_pending_traffic():
             ib = inbound_by_uid(db, uid)
             if ib:
                 ib["request_count"] = ib.get("request_count", 0) + count
+        window = _sharing_settings(db)["window"]
+        for uid, seen in seen_ips.items():
+            ib = inbound_by_uid(db, uid)
+            if ib:
+                _fold_ip_log(ib, seen, window)
         stats = db.setdefault("stats", {})
         stats["total_up"] = stats.get("total_up", 0) + total_up
         stats["total_down"] = stats.get("total_down", 0) + total_down
@@ -1409,6 +1420,49 @@ async def _run_health_checks() -> list:
     return transitions
 
 
+async def _sharing_loop():
+    """One sweep every 15 minutes on the leader.
+
+    Slower than the health loop on purpose: sharing is a pattern that emerges
+    over hours, and a tighter loop would only rewrite the flag repeatedly.
+    """
+    while True:
+        try:
+            await asyncio.sleep(SHARING_SWEEP_INTERVAL)
+            db = await store.get()
+            if not _sharing_settings(db)["enabled"] or not _is_leader():
+                continue
+
+            transitions = await _run_sharing_check()
+            if not transitions:
+                continue
+            db = await store.get()
+            token, chat, _ = _notify_config(db)
+            if not token:
+                continue
+            conf = _sharing_settings(db)
+            panel = brand(db)["panel_name"]
+            # Only the newly flagged are worth a message; "stopped sharing" is
+            # not something the seller needs woken up for.
+            for state, uid, name, networks in transitions:
+                if state != "flagged":
+                    continue
+                hours = conf["window"] // 3600
+                text = (f"👥 <b>{notify._escape(panel)}</b>\n\n"
+                        f"اشتراک <b>{notify._escape(name)}</b> در {hours} ساعت"
+                        f" گذشته از <b>{networks}</b> شبکه‌ی متفاوت استفاده شده است.")
+                if conf["auto_disable"]:
+                    text += "\n\nطبق تنظیمات، غیرفعال شد."
+                try:
+                    await notify.send_message(token, chat, text)
+                except notify.TelegramError:
+                    break
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(60)
+
+
 async def _health_loop():
     while True:
         try:
@@ -1787,6 +1841,7 @@ BOOL_SETTINGS = {
     "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
     "auto_backup_enabled", "userbot_enabled", "cleanup_enabled", "trial_enabled",
     "userbot_renew_enabled", "health_check_enabled", "health_auto_disable",
+    "sharing_detect_enabled", "sharing_auto_disable",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
@@ -1807,6 +1862,8 @@ INT_SETTINGS = {
     "trial_days": (1, 30),
     "health_interval_minutes": (1, 1440),
     "health_fail_threshold": (1, 20),
+    "sharing_window_hours": (1, 168),
+    "sharing_threshold": (2, 50),
 }
 OTA_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$")
 
@@ -2147,23 +2204,32 @@ def sanitize_inbound_payload(payload: dict, partial: bool) -> dict:
     return out
 
 
-def serialize_inbound(ib, include_secrets: bool = True) -> dict:
+def serialize_inbound(ib, include_secrets: bool = True,
+                      sharing_window: Optional[int] = None) -> dict:
     st = inbound_status(ib)
-    # "history" is up to 90 daily buckets per user; shipping it inside every
-    # listing would dominate the payload. It has its own endpoint.
-    out = {k: v for k, v in ib.items() if k not in ("uuid", "history")}
+    # "history" is up to 90 daily buckets per user and "ip_log" up to 40
+    # addresses; shipping either inside every listing would dominate the
+    # payload. Both are summarised or fetched separately instead.
+    out = {k: v for k, v in ib.items() if k not in ("uuid", "history", "ip_log")}
     if include_secrets:
         out["uuid"] = ib.get("uuid")
     # Previously hardcoded to None, so the panel could never show who was online.
     out["active_ips"] = merged_active_ips(ib["uid"])
     out["status"] = st
+    if sharing_window:
+        report = sharing_report(ib, sharing_window)
+        out["sharing"] = {"ips": report["ips"], "networks": report["networks"]}
     return out
 
 
 @app.get("/api/inbounds")
 async def api_list_inbounds(user: Identity = Depends(require_auth)):
     db = await store.get()
-    return {"inbounds": [serialize_inbound(ib) for ib in visible_inbounds(db, user)]}
+    conf = _sharing_settings(db)
+    window = conf["window"] if conf["enabled"] else None
+    return {"inbounds": [serialize_inbound(ib, sharing_window=window)
+                         for ib in visible_inbounds(db, user)],
+            "sharing_threshold": conf["threshold"] if conf["enabled"] else 0}
 
 
 @app.post("/api/inbounds")
@@ -2181,6 +2247,7 @@ async def api_create_inbound(request: Request, user: Identity = Depends(require_
         "uid": gen_uid(),
         "uuid": gen_uuid(),
         "sub_token": gen_uid(),
+        "ip_log": {},
         "owner": None if user.is_owner else user.id,
         "enabled": True,
         "created_at": now,
@@ -2318,6 +2385,55 @@ async def api_regenerate_uuid(uid: str, user: Identity = Depends(require_auth)):
 
 
 # ------------------------------------------------------------------ trials & retention
+@app.get("/api/inbounds/{uid}/networks")
+async def api_inbound_networks(uid: str, user: Identity = Depends(require_auth)):
+    """Where this subscription has been used from, newest first."""
+    db = await store.get()
+    ib = require_owned(db, user, uid)
+    conf = _sharing_settings(db)
+    report = sharing_report(ib, conf["window"])
+    return {
+        "window_hours": conf["window"] // 3600,
+        "threshold": conf["threshold"],
+        "ips": report["ips"],
+        "networks": report["networks"],
+        "flagged": bool(ib.get("sharing_flagged")),
+        "recent": [{"ip": ip, "network": _network_of(ip), "last": ts}
+                   for ip, ts in report["recent"]],
+    }
+
+
+@app.post("/api/sharing/check")
+async def api_sharing_check(user: Identity = Depends(require_owner)):
+    """Run the sweep now instead of waiting for the loop."""
+    db = await store.get()
+    if not _sharing_settings(db)["enabled"]:
+        raise HTTPException(400, "sharing-disabled")
+    transitions = await _run_sharing_check()
+    return {"ok": True, "flagged": [
+        {"uid": uid, "name": name, "networks": n}
+        for state, uid, name, n in transitions if state == "flagged"
+    ]}
+
+
+@app.post("/api/inbounds/{uid}/clear-flag")
+async def api_clear_sharing_flag(uid: str, user: Identity = Depends(require_auth)):
+    """Forget what was seen so far and start the window over.
+
+    Useful after the customer is told to stop, so the flag reflects behaviour
+    from now on rather than the evidence that triggered it.
+    """
+    def _apply(db):
+        ib = require_owned(db, user, uid)
+        ib["ip_log"] = {}
+        ib["sharing_flagged"] = False
+        ib["sharing_networks"] = 0
+        ib.pop("sharing_flagged_at", None)
+
+    await store.mutate(_apply)
+    return {"ok": True}
+
+
 @app.get("/api/fragment-profiles")
 async def api_fragment_profiles(user: Identity = Depends(require_owner)):
     db = await store.get()
@@ -2349,6 +2465,7 @@ async def api_create_trial(request: Request, user: Identity = Depends(require_au
         "uid": gen_uid(),
         "uuid": gen_uuid(),
         "sub_token": gen_uid(),
+        "ip_log": {},
         "owner": None if user.is_owner else user.id,
         "name": f"{prefix}-{existing + 1:03d}",
         "enabled": True,
@@ -2398,6 +2515,127 @@ async def api_cleanup_preview(user: Identity = Depends(require_owner)):
 async def api_cleanup_now(user: Identity = Depends(require_owner)):
     result = await _run_cleanup()
     return {"ok": True, **result}
+
+
+
+# ------------------------------------------------------------------ anti-sharing
+SHARING_SWEEP_INTERVAL = 900       # 15 minutes
+SHARING_MIN_WINDOW = 3600          # an hour; below this the signal is noise
+SHARING_DEFAULT_WINDOW = 86400
+MAX_TRACKED_IPS = 40               # per user, oldest evicted first
+
+
+def _network_of(ip: str) -> str:
+    """Collapse an address to the network its ISP hands out.
+
+    A phone on mobile data gets a new address constantly, but stays inside one
+    provider block. Counting raw addresses would flag every such customer;
+    counting networks only flags an account that is genuinely in several
+    places at once.
+    """
+    ip = (ip or "").strip()
+    if not ip:
+        return ""
+    if ":" in ip:                                   # IPv6 -> /64
+        parts = ip.split(":")
+        return ":".join(parts[:4]).lower() + "::/64"
+    octets = ip.split(".")
+    if len(octets) != 4:
+        return ip
+    return ".".join(octets[:3]) + ".0/24"
+
+
+def _sharing_settings(db) -> dict:
+    s = db.get("settings") or {}
+    try:
+        window = int(s.get("sharing_window_hours") or 24) * 3600
+    except (TypeError, ValueError):
+        window = SHARING_DEFAULT_WINDOW
+    try:
+        threshold = int(s.get("sharing_threshold") or 4)
+    except (TypeError, ValueError):
+        threshold = 4
+    return {
+        "enabled": bool(s.get("sharing_detect_enabled")),
+        "window": max(SHARING_MIN_WINDOW, window),
+        "threshold": max(2, min(50, threshold)),
+        "auto_disable": bool(s.get("sharing_auto_disable")),
+    }
+
+
+def sharing_report(ib: dict, window: int, now: Optional[float] = None) -> dict:
+    """Distinct addresses and networks seen inside the window."""
+    now = now if now is not None else time.time()
+    log = ib.get("ip_log") or {}
+    fresh = {ip: ts for ip, ts in log.items() if now - ts <= window}
+    networks = {}
+    for ip, ts in fresh.items():
+        net = _network_of(ip)
+        networks[net] = max(networks.get(net, 0), ts)
+    return {
+        "ips": len(fresh),
+        "networks": len(networks),
+        "last_seen": max(fresh.values()) if fresh else None,
+        "recent": sorted(fresh.items(), key=lambda kv: -kv[1])[:12],
+    }
+
+
+def _record_ip(uid: str, ip: str):
+    if not ip:
+        return
+    runtime["pending_ips"].setdefault(uid, {})[ip] = time.time()
+
+
+def _fold_ip_log(ib: dict, seen: dict, window: float):
+    """Merge one user's freshly seen addresses and prune the rest."""
+    log = ib.setdefault("ip_log", {})
+    log.update(seen)
+    cutoff = time.time() - window
+    for ip in [ip for ip, ts in log.items() if ts < cutoff]:
+        del log[ip]
+    if len(log) > MAX_TRACKED_IPS:
+        for ip, _ in sorted(log.items(), key=lambda kv: kv[1])[:len(log) - MAX_TRACKED_IPS]:
+            del log[ip]
+
+
+async def _run_sharing_check() -> list:
+    """Flag subscriptions used from more networks than the threshold allows.
+
+    Returns the users that changed state, so the caller can alert once rather
+    than on every sweep.
+    """
+    db = await store.get()
+    conf = _sharing_settings(db)
+    if not conf["enabled"]:
+        return []
+
+    transitions = []
+    disabled = []
+
+    def _apply(db):
+        for ib in db["inbounds"]:
+            report = sharing_report(ib, conf["window"])
+            over = report["networks"] >= conf["threshold"]
+            was = bool(ib.get("sharing_flagged"))
+            ib["sharing_networks"] = report["networks"]
+            if over and not was:
+                ib["sharing_flagged"] = True
+                ib["sharing_flagged_at"] = time.time()
+                transitions.append(("flagged", ib["uid"], ib.get("name", ""), report["networks"]))
+                if conf["auto_disable"] and ib.get("enabled", True):
+                    ib["enabled"] = False
+                    disabled.append(ib["uid"])
+            elif not over and was:
+                # Clearing is automatic: the seller should not have to reset a
+                # flag by hand once the customer stops sharing.
+                ib["sharing_flagged"] = False
+                ib.pop("sharing_flagged_at", None)
+                transitions.append(("cleared", ib["uid"], ib.get("name", ""), report["networks"]))
+
+    await store.mutate(_apply)
+    for uid in disabled:
+        await _disconnect_uid(uid)
+    return transitions
 
 
 # ------------------------------------------------------------------ resellers
@@ -2661,6 +2899,7 @@ async def api_bulk_create(request: Request, user: Identity = Depends(require_aut
             "uid": gen_uid(),
             "uuid": gen_uuid(),
             "sub_token": gen_uid(),
+            "ip_log": {},
             "owner": None if user.is_owner else user.id,
             "name": f"{prefix}-{str(start + i).zfill(width)}"[:64],
             "enabled": True,
@@ -3671,6 +3910,7 @@ async def ws_endpoint(websocket: WebSocket, uid: str):
 
     conn_id = secrets.token_hex(6)
     active_for_uid[conn_id] = {"ip": ip, "since": time.time(), "ws": websocket}
+    _record_ip(uid, ip)
     # Buffered, not written through: this used to rewrite the whole db.json
     # once per connection.
     runtime["pending_requests"][uid] = runtime["pending_requests"].get(uid, 0) + 1

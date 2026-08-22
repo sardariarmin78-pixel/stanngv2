@@ -451,6 +451,42 @@
             </div>
           </div>
 
+          <div class="col-12 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-users"/></svg><span data-i18n="shr_title">تشخیص اشتراک‌گذاری</span></h3>
+              <button class="btn btn-sm" id="sharingCheckBtn"><svg><use href="#icon-refresh"/></svg><span data-i18n="shr_check_now">بررسی همین حالا</span></button>
+            </div>
+            <div class="win-body flex-col gap-16">
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="shr_enable">فعال باشد</div>
+                  <div class="hint" data-i18n="shr_hint">تعداد شبکه‌های متفاوتی که هر اشتراک از آن‌ها استفاده شده شمرده می‌شود. شبکه شمرده می‌شود نه IP — چون IP موبایل مدام عوض می‌شود و شمردن آن، هر مشتری سالمی را متهم می‌کند.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingSharingEnabled"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label data-i18n="shr_window">بازه بررسی (ساعت)</label>
+                  <input class="input" type="number" id="settingSharingWindow" min="1" max="168" step="1">
+                </div>
+                <div class="field">
+                  <label data-i18n="shr_threshold">آستانه (تعداد شبکه)</label>
+                  <input class="input" type="number" id="settingSharingThreshold" min="2" max="50" step="1">
+                  <div class="small muted mt-8" data-i18n="shr_threshold_hint">۴ برای شروع منطقی است: خانه، موبایل، محل کار و یک جای اضافه.</div>
+                </div>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="shr_auto_disable">غیرفعال کردن خودکار</div>
+                  <div class="hint" data-i18n="shr_auto_disable_hint">خاموش بگذار مگر مطمئن باشی. قطع کردن مشتری‌ای که پول داده تصمیم توست، نه کار خودکار پنل.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingSharingAutoDisable"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div id="sharingResult" class="small"></div>
+              <button class="btn btn-primary btn-sm" id="saveSharingBtn" style="align-self:start;"><span data-i18n="save">ذخیره</span></button>
+            </div>
+          </div>
+
           <div class="col-12 win" data-owner-only>
             <div class="win-head">
               <h3><svg><use href="#icon-clock"/></svg><span data-i18n="loginlog_title">تاریخچه ورود</span></h3>
@@ -1048,6 +1084,34 @@
     <div class="modal-foot">
       <button class="btn btn-ghost" data-close-modal="planModal"><span data-i18n="cancel">انصراف</span></button>
       <button class="btn btn-primary" id="planSaveBtn"><span data-i18n="save">ذخیره</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: where a subscription was used ============ -->
+<div class="modal-overlay" id="networksModal">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-head">
+      <h3><svg><use href="#icon-globe"/></svg><span data-i18n="shr_modal_title">شبکه‌های استفاده‌شده</span></h3>
+      <button class="icon-btn" data-close-modal="networksModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div id="networksSummary" class="small muted mb-12"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th data-i18n="shr_ip">آدرس</th>
+            <th data-i18n="shr_network">شبکه</th>
+            <th style="text-align:end;" data-i18n="shr_last">آخرین بار</th>
+          </tr></thead>
+          <tbody id="networksTableBody"></tbody>
+        </table>
+      </div>
+      <div class="small muted mt-8" data-i18n="shr_modal_hint">چند آدرس در یک شبکه یعنی یک نفر با IP متغیر. چند شبکه‌ی متفاوت یعنی چند جای مختلف.</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="networksModal"><span data-i18n="close">بستن</span></button>
+      <button class="btn btn-danger" id="clearFlagBtn"><span data-i18n="shr_clear">پاک کردن سابقه و شروع دوباره</span></button>
     </div>
   </div>
 </div>
