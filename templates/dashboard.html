@@ -438,6 +438,42 @@
           </div>
 
           <div class="col-6 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-clock"/></svg><span data-i18n="rn_title">درخواست تمدید از ربات</span></h3>
+              <span class="pill pill-muted" id="rnBadge" data-i18n="rn_off">خاموش</span>
+            </div>
+            <div class="win-body">
+              <div class="small muted mb-16" data-i18n="rn_hint">کاربر در ربات دستور /renew می‌زند، برای شما پیامی با دکمه‌های تأیید می‌آید و با یک تپ تمدید انجام می‌شود. حجم مصرفی هم از نو شروع می‌شود.</div>
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="rn_enable">فعال باشد</div>
+                  <div class="hint" id="rnPending">—</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingRenewEnabled"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="field">
+                <label data-i18n="rn_options">گزینه‌های تمدید (روز، با کاما)</label>
+                <input class="input mono" type="text" id="settingRenewOptions" placeholder="30,60,90" style="direction:ltr;">
+                <div class="small muted mt-8" data-i18n="rn_options_hint">حداکثر چهار گزینه؛ روی یک ردیف دکمه جا می‌شوند.</div>
+              </div>
+              <div class="flex gap-8 flex-wrap">
+                <button class="btn btn-primary btn-sm" id="saveRenewBtn"><span data-i18n="save">ذخیره</span></button>
+                <button class="btn btn-sm" id="rnRefreshBtn"><svg><use href="#icon-refresh"/></svg><span data-i18n="rn_list">درخواست‌ها</span></button>
+              </div>
+              <div class="table-wrap mt-12" id="rnTableWrap" style="display:none;">
+                <table>
+                  <thead><tr>
+                    <th data-i18n="inb_name">نام</th>
+                    <th data-i18n="loginlog_time">زمان</th>
+                    <th data-i18n="inb_status">وضعیت</th>
+                  </tr></thead>
+                  <tbody id="rnTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6 win">
             <div class="win-head"><h3><svg><use href="#icon-bell"/></svg><span data-i18n="notify_rules_title">قوانین هشدار</span></h3></div>
             <div class="win-body">
               <div class="setting-row">
