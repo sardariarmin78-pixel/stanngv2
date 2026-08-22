@@ -254,6 +254,33 @@
                 <tbody id="endpointsTableBody"></tbody>
               </table>
             </div>
+            <div class="win-body" style="border-top:1px solid var(--border);">
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="hl_enable">پایش خودکار سلامت</div>
+                  <div class="hint" data-i18n="hl_hint">هر چند دقیقه لوکیشن‌ها تست می‌شوند و اگر یکی چند بار پشت‌سرهم جواب نداد، در تلگرام خبر می‌دهد.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingHealthEnabled"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label data-i18n="hl_interval">فاصله (دقیقه)</label>
+                  <input class="input" type="number" id="settingHealthInterval" min="1" max="1440" step="1" placeholder="15" style="direction:ltr;">
+                </div>
+                <div class="field">
+                  <label data-i18n="hl_threshold">بعد از چند خطای پیاپی</label>
+                  <input class="input" type="number" id="settingHealthThreshold" min="1" max="20" step="1" placeholder="3" style="direction:ltr;">
+                </div>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="hl_auto_disable">غیرفعال کردن خودکار لوکیشن خراب</div>
+                  <div class="hint" data-i18n="hl_auto_disable_hint">لوکیشنی که جواب نمی‌دهد از لینک اشتراک کاربران حذف می‌شود.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingHealthAutoDisable"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <button class="btn btn-primary btn-sm" id="saveHealthBtn"><span data-i18n="save">ذخیره</span></button>
+            </div>
             <div class="empty-state" id="endpointsEmpty" style="display:none;">
               <svg><use href="#icon-globe"/></svg>
               <div class="title" data-i18n="ep_empty">هنوز لوکیشنی اضافه نشده</div>
@@ -1001,7 +1028,8 @@
       </div>
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_sub_link">لینک اشتراک (سازگار با v2rayNG)</label>
-        <div class="link-row"><code id="linkSub"></code><button class="icon-btn btn-sm" data-copy="linkSub" title="copy"><svg><use href="#icon-copy"/></svg></button></div>
+        <div class="link-row"><code id="linkSub"></code><button class="icon-btn btn-sm" data-copy="linkSub" title="copy"><svg><use href="#icon-copy"/></svg></button><button class="icon-btn btn-sm" id="rotateLinkBtn" data-i18n-title="rot_button" title="" style="color:var(--warn)"><svg><use href="#icon-refresh"/></svg></button></div>
+        <div class="small muted mt-8" data-i18n="rot_hint">اگر این لینک جایی لو رفت، با دکمه چرخش یک آدرس تازه بگیرید. کانفیگ‌های نصب‌شده روی دستگاه کاربر دست‌نخورده کار می‌کنند.</div>
         <div class="small muted mt-8">
           <svg width="12" height="12" style="vertical-align:-2px;"><use href="#icon-info"/></svg>
           <span data-i18n="inb_sub_note">حجم و تاریخ انقضا از طریق هدر استاندارد Subscription-Userinfo داخل کلاینت نمایش داده می‌شود.</span>

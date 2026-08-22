@@ -192,7 +192,7 @@ def test_subscription_userinfo_header(client):
     rec["used_up"] = 1000
     rec["used_down"] = 2000
 
-    r = client.get(f"/sub/{uid}")
+    r = client.get(f"/sub/{ib['sub_token']}")
     assert r.status_code == 200
     info = r.headers["Subscription-Userinfo"]
     assert "upload=1000" in info
@@ -214,7 +214,7 @@ def test_link_contains_expected_params(client):
     assert "type=ws" in tls
     assert f"path=/ws/{ib['uid']}" in tls   # '/' must stay unescaped for v2rayNG
     assert "alpn=http/1.1" in tls
-    assert links["sub_url"].endswith(f"/sub/{ib['uid']}")
+    assert links["sub_url"].endswith(f"/sub/{ib['sub_token']}")
 
 
 def test_fragment_settings_reach_the_link(client):
@@ -239,7 +239,7 @@ def test_public_status_reports_reason(client):
     ib = _make(client, quota_gb=1)
     rec = main.inbound_by_uid(main.store.get_sync(), ib["uid"])
     rec["used_down"] = 5 * 1024 ** 3
-    body = client.get(f"/api/status/{ib['uid']}").json()
+    body = client.get(f"/api/status/{ib['sub_token']}").json()
     assert body["enabled"] is False
     assert body["reason"] == "quota"
 
@@ -283,7 +283,7 @@ def test_backup_and_restore_roundtrip(client):
     assert backup["admin"]["username"] == ADMIN["username"]
 
     client.delete(f"/api/inbounds/{ib['uid']}")
-    assert client.get(f"/api/status/{ib['uid']}").status_code == 404
+    assert client.get(f"/api/status/{ib['sub_token']}").status_code == 404
 
     # Restore signs the caller out, so log back in before asserting.
     assert client.post("/api/restore", json={"db": backup}).status_code == 200
@@ -412,7 +412,7 @@ def test_public_domain_with_port_does_not_leak_into_vless_host(client):
         assert "@panel.example.com:443?" in r["links"]["tls"]
         assert "8443:443" not in r["links"]["tls"]
         # scheme follows the request (no x-forwarded-proto here), the port survives
-        assert r["sub_url"] == f"http://panel.example.com:8443/sub/{ib['uid']}"
+        assert r["sub_url"] == f"http://panel.example.com:8443/sub/{ib['sub_token']}"
     finally:
         client.post("/api/settings", json={"public_domain": ""})
 
@@ -423,7 +423,7 @@ def test_public_domain_strips_scheme(client):
     try:
         r = client.get(f"/api/inbounds/{ib['uid']}/links").json()
         assert "@vpn.example.com:443?" in r["links"]["tls"]
-        assert r["sub_url"] == f"http://vpn.example.com/sub/{ib['uid']}"
+        assert r["sub_url"] == f"http://vpn.example.com/sub/{ib['sub_token']}"
     finally:
         client.post("/api/settings", json={"public_domain": ""})
 
@@ -433,7 +433,7 @@ def test_userinfo_includes_unflushed_traffic(client):
     uid = ib["uid"]
     main.runtime["pending_traffic"][uid] = {"up": 111, "down": 222}
     try:
-        info = client.get(f"/sub/{uid}").headers["Subscription-Userinfo"]
+        info = client.get(f"/sub/{ib['sub_token']}").headers["Subscription-Userinfo"]
         assert "upload=111" in info
         assert "download=222" in info
     finally:
@@ -445,8 +445,8 @@ def test_forwarded_proto_drives_link_scheme(client):
     ib = _make(client)
     r = client.get(f"/api/inbounds/{ib['uid']}/links",
                    headers={"x-forwarded-proto": "https", "x-forwarded-host": "vpn.example.com"}).json()
-    assert r["sub_url"] == f"https://vpn.example.com/sub/{ib['uid']}"
-    assert r["status_url"] == f"https://vpn.example.com/status/{ib['uid']}"
+    assert r["sub_url"] == f"https://vpn.example.com/sub/{ib['sub_token']}"
+    assert r["status_url"] == f"https://vpn.example.com/status/{ib['sub_token']}"
 
 
 # ------------------------------------------------------------------ 2.0 rename

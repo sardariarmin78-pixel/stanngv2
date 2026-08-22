@@ -117,6 +117,7 @@ COLO_CACHE_TTL = 3600       # seconds: the edge datacentre does not move often
 NOTIFY_INTERVAL = 300       # seconds: scan for quota/expiry alerts
 BACKUP_CHECK_INTERVAL = 900 # seconds: how often to consider an auto-backup
 CLEANUP_INTERVAL = 3600     # seconds: how often to sweep expired accounts
+HEALTH_MIN_INTERVAL = 60    # seconds: floor on the endpoint probe interval
 USERBOT_IDLE_SLEEP = 3      # seconds to back off after a bot polling error
 JOURNAL_INTERVAL = 1        # seconds: publish this worker's runtime slice
 
@@ -206,6 +207,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_backup_loop()),
         asyncio.create_task(_userbot_loop()),
         asyncio.create_task(_cleanup_loop()),
+        asyncio.create_task(_health_loop()),
     ]
     try:
         yield
@@ -420,6 +422,24 @@ def inbound_by_uid(db, uid: str):
         if ib.get("uid") == uid:
             return ib
     return None
+
+
+def inbound_by_token(db, token: str):
+    """Resolve a public subscription/status URL.
+
+    Deliberately matches only the rotatable token, never the uid: matching
+    both would mean a rotated link keeps working and the rotation achieves
+    nothing. Older records carry token == uid from the migration, so links
+    issued before this existed still resolve.
+    """
+    for ib in db["inbounds"]:
+        if ib.get("sub_token") == token:
+            return ib
+    return None
+
+
+def sub_token_of(ib) -> str:
+    return ib.get("sub_token") or ib["uid"]
 
 
 def _pending_for(uid: str) -> int:
@@ -831,7 +851,7 @@ class _BotContext:
         if not ib:
             return "", []
         configs = build_configs_for_origin(self.db, ib, self.origin)
-        return f"{self.origin}/sub/{uid}", configs
+        return f"{self.origin}/sub/{sub_token_of(ib)}", configs
 
     def has_open_request(self, chat) -> bool:
         """One open ask per chat, so tapping /renew repeatedly cannot spam."""
@@ -1202,6 +1222,139 @@ async def _handle_renew_callback(callback: dict):
             pass
 
 
+async def _probe_endpoint(ep: dict) -> dict:
+    """One reachability probe, shaped like the manual test."""
+    try:
+        port = int(ep.get("port") or 443)
+    except (TypeError, ValueError):
+        port = 443
+    scheme = "https" if port != 80 else "http"
+    address = ep.get("address") or ""
+    if ":" in address and not address.startswith("["):
+        address = f"[{address}]"
+    url = f"{scheme}://{address}:{port}/health"
+
+    host_header = (ep.get("host") or "").strip()
+    headers = {"Host": host_header} if host_header else {}
+    sni = (ep.get("sni") or "").strip() or host_header
+    extensions = {"sni_hostname": sni} if sni else {}
+
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers, extensions=extensions)
+        latency = int((time.perf_counter() - started) * 1000)
+        return {"ok": r.status_code == 200, "ts": time.time(),
+                "latency_ms": latency, "detail": f"HTTP {r.status_code}"}
+    except Exception as e:
+        return {"ok": False, "ts": time.time(),
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "detail": type(e).__name__}
+
+
+def _health_settings(db) -> dict:
+    s = db.get("settings") or {}
+    def _int(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(s.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+    return {
+        "enabled": bool(s.get("health_check_enabled")),
+        "interval": max(HEALTH_MIN_INTERVAL, _int("health_interval_minutes", 15, 1, 1440) * 60),
+        "threshold": _int("health_fail_threshold", 3, 1, 20),
+        "auto_disable": bool(s.get("health_auto_disable")),
+    }
+
+
+async def _run_health_checks() -> list:
+    """Probe every enabled endpoint and report state transitions.
+
+    Alerts fire on a run of consecutive failures rather than the first one:
+    a single timed-out probe is usually the probe's fault, and alerting on it
+    trains the admin to ignore the alerts.
+    """
+    db = await store.get()
+    conf = _health_settings(db)
+    endpoints = [e for e in db.get("endpoints", []) if e.get("address")]
+    if not endpoints:
+        return []
+
+    results = {}
+    for ep in endpoints:
+        if not ep.get("enabled", True):
+            continue
+        results[ep["id"]] = await _probe_endpoint(ep)
+
+    transitions = []
+
+    def _apply(db):
+        for ep in db.get("endpoints", []):
+            probe = results.get(ep.get("id"))
+            if not probe:
+                continue
+            previous = ep.get("health") or {}
+            fails = int(previous.get("fail_count") or 0)
+            was_down = bool(previous.get("alerted_down"))
+
+            if probe["ok"]:
+                if was_down:
+                    transitions.append(("up", ep.get("name") or ep["address"], probe))
+                ep["health"] = {**probe, "fail_count": 0, "alerted_down": False}
+            else:
+                fails += 1
+                alerted = was_down
+                if fails >= conf["threshold"] and not was_down:
+                    transitions.append(("down", ep.get("name") or ep["address"], probe))
+                    alerted = True
+                    if conf["auto_disable"]:
+                        # A dead entry point should stop being handed to users.
+                        ep["enabled"] = False
+                ep["health"] = {**probe, "fail_count": fails, "alerted_down": alerted}
+
+    await store.mutate(_apply, persist=bool(transitions))
+    return transitions
+
+
+async def _health_loop():
+    while True:
+        try:
+            db = await store.get()
+            conf = _health_settings(db)
+            if not conf["enabled"] or not _is_leader():
+                await asyncio.sleep(30)
+                continue
+            await asyncio.sleep(conf["interval"])
+            if not _is_leader():
+                continue
+
+            transitions = await _run_health_checks()
+            if not transitions:
+                continue
+            db = await store.get()
+            token, chat, _ = _notify_config(db)
+            if not token:
+                continue
+            panel = brand(db)["panel_name"]
+            for state, name, probe in transitions:
+                if state == "down":
+                    text = (f"🔴 <b>{notify._escape(panel)}</b>\n\n"
+                            f"لوکیشن <b>{notify._escape(name)}</b> در دسترس نیست."
+                            f"\n<code>{notify._escape(probe.get('detail', ''))}</code>")
+                else:
+                    text = (f"🟢 <b>{notify._escape(panel)}</b>\n\n"
+                            f"لوکیشن <b>{notify._escape(name)}</b> دوباره در دسترس است"
+                            f" ({probe.get('latency_ms')} ms).")
+                try:
+                    await notify.send_message(token, chat, text)
+                except notify.TelegramError:
+                    break
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(60)
+
+
 async def _keep_alive_loop():
     """Ping our own public URL so free-tier hosts don't idle the service out.
 
@@ -1280,12 +1433,13 @@ async def dashboard_page(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", _page_context(db))
 
 
-@app.get("/status/{uid}", response_class=HTMLResponse)
-async def status_page(request: Request, uid: str):
+@app.get("/status/{token}", response_class=HTMLResponse)
+async def status_page(request: Request, token: str):
     db = await store.get()
-    if not inbound_by_uid(db, uid):
+    if not inbound_by_token(db, token):
         return HTMLResponse("<h1>404</h1><p>Not found.</p>", status_code=404)
-    return templates.TemplateResponse(request, "status.html", _page_context(db, {"uid": uid}))
+    return templates.TemplateResponse(request, "status.html",
+                                      _page_context(db, {"uid": token}))
 
 
 # ------------------------------------------------------------------ auth api
@@ -1483,7 +1637,7 @@ BOOL_SETTINGS = {
     "keep_alive", "fragment_enabled", "allow_private_destinations",
     "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
     "auto_backup_enabled", "userbot_enabled", "cleanup_enabled", "trial_enabled",
-    "userbot_renew_enabled",
+    "userbot_renew_enabled", "health_check_enabled", "health_auto_disable",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
@@ -1502,6 +1656,8 @@ INT_SETTINGS = {
     "cleanup_disable_days": (0, 365),
     "cleanup_delete_days": (0, 3650),
     "trial_days": (1, 30),
+    "health_interval_minutes": (1, 1440),
+    "health_fail_threshold": (1, 20),
 }
 OTA_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$")
 
@@ -1821,6 +1977,7 @@ async def api_create_inbound(request: Request, user: str = Depends(require_auth)
     ib = {
         "uid": gen_uid(),
         "uuid": gen_uuid(),
+        "sub_token": gen_uid(),
         "enabled": True,
         "created_at": now,
         "expire_at": (now + fields["expire_days"] * 86400) if fields["expire_days"] > 0 else None,
@@ -1925,6 +2082,29 @@ async def api_reset_usage(uid: str, user: str = Depends(require_auth)):
     return {"ok": True, "inbound": serialize_inbound(inbound_by_uid(db, uid))}
 
 
+@app.post("/api/inbounds/{uid}/rotate-link")
+async def api_rotate_sub_link(uid: str, user: str = Depends(require_auth)):
+    """Issue a new subscription URL, killing the old one.
+
+    Deliberately does *not* touch the uuid or the WebSocket path: a leaked
+    subscription link can be revoked while every config already installed on
+    the customer's device keeps working. Rotating the uuid instead is what
+    /regenerate is for, and that does cut them off.
+    """
+    result = {}
+
+    def _apply(db):
+        ib = inbound_by_uid(db, uid)
+        if not ib:
+            raise HTTPException(404, "not-found")
+        ib["sub_token"] = gen_uid()
+        result.update(ib)
+
+    db = await store.mutate(_apply)
+    return {"ok": True, "sub_token": result.get("sub_token"),
+            "inbound": serialize_inbound(inbound_by_uid(db, uid))}
+
+
 @app.post("/api/inbounds/{uid}/regenerate")
 async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
     """Anti-resale: instantly revoke old links by rotating the VLESS uuid."""
@@ -1972,6 +2152,7 @@ async def api_create_trial(request: Request, user: str = Depends(require_auth)):
     ib = {
         "uid": gen_uid(),
         "uuid": gen_uuid(),
+        "sub_token": gen_uid(),
         "name": f"{prefix}-{existing + 1:03d}",
         "enabled": True,
         "created_at": now,
@@ -2143,6 +2324,7 @@ async def api_bulk_create(request: Request, user: str = Depends(require_auth)):
         ib = {
             "uid": gen_uid(),
             "uuid": gen_uuid(),
+            "sub_token": gen_uid(),
             "name": f"{prefix}-{str(start + i).zfill(width)}"[:64],
             "enabled": True,
             "created_at": now,
@@ -2399,11 +2581,12 @@ async def api_inbound_links(uid: str, request: Request, user: str = Depends(requ
     if not ib:
         raise HTTPException(404, "not-found")
     origin = public_origin(request, db)
+    token = sub_token_of(ib)
     return {
         "links": build_links(request, db, ib),
-        "sub_url": f"{origin}/sub/{uid}",
-        "sub_json_url": f"{origin}/sub/{uid}/json",
-        "status_url": f"{origin}/status/{uid}",
+        "sub_url": f"{origin}/sub/{token}",
+        "sub_json_url": f"{origin}/sub/{token}/json",
+        "status_url": f"{origin}/status/{token}",
     }
 
 
@@ -2416,7 +2599,7 @@ async def api_inbound_qr(uid: str, request: Request, user: str = Depends(require
     configs = build_configs(request, db, ib)
     # With several routes a single config QR would pin the user to one of
     # them; the subscription URL carries all of them and keeps updating.
-    target = (f"{public_origin(request, db)}/sub/{uid}"
+    target = (f"{public_origin(request, db)}/sub/{sub_token_of(ib)}"
               if len(configs) > 1 else configs[0]["link"])
 
     def _render() -> bytes:
@@ -2519,6 +2702,19 @@ async def api_delete_endpoint(endpoint_id: str, user: str = Depends(require_auth
     return {"ok": True}
 
 
+@app.post("/api/endpoints/check-all")
+async def api_check_all_endpoints(user: str = Depends(require_auth)):
+    """Run the monitored probe across every endpoint, on demand."""
+    transitions = await _run_health_checks()
+    db = await store.get()
+    return {
+        "ok": True,
+        "transitions": [{"state": t[0], "name": t[1]} for t in transitions],
+        "endpoints": [{"id": e.get("id"), "name": e.get("name"),
+                       "health": e.get("health")} for e in db.get("endpoints", [])],
+    }
+
+
 @app.post("/api/endpoints/{endpoint_id}/test")
 async def api_test_endpoint(endpoint_id: str, user: str = Depends(require_auth)):
     """Reachability + latency for one entry point.
@@ -2573,8 +2769,8 @@ async def api_test_endpoint(endpoint_id: str, user: str = Depends(require_auth))
 
 
 # ------------------------------------------------------------------ subscriptions
-@app.get("/sub/{uid}")
-async def sub_plain(uid: str, request: Request, format: Optional[str] = None):
+@app.get("/sub/{token}")
+async def sub_plain(token: str, request: Request, format: Optional[str] = None):
     """Subscription in whichever dialect the client speaks.
 
     Plain text stays the default and the fallback. Clash and sing-box get a
@@ -2582,7 +2778,7 @@ async def sub_plain(uid: str, request: Request, format: Optional[str] = None):
     blocked route on its own instead of the user guessing.
     """
     db = await store.get()
-    ib = inbound_by_uid(db, uid)
+    ib = inbound_by_token(db, token)
     if not ib:
         raise HTTPException(404, "not-found")
 
@@ -2596,7 +2792,7 @@ async def sub_plain(uid: str, request: Request, format: Optional[str] = None):
         "Subscription-Userinfo": subscription_userinfo(ib),
         "Profile-Update-Interval": "12",
         "Profile-Title": header_safe_title(profile),
-        "Content-Disposition": f'inline; filename="{uid}.{ext}"',
+        "Content-Disposition": f'inline; filename="{token}.{ext}"',
         "Cache-Control": "no-store",
         # Lets a client (and a human debugging one) see which dialect it got.
         "X-Subscription-Format": fmt,
@@ -2604,17 +2800,17 @@ async def sub_plain(uid: str, request: Request, format: Optional[str] = None):
     return Response(body, media_type=subscription.CONTENT_TYPES[fmt], headers=headers)
 
 
-@app.get("/sub/{uid}/json")
-async def sub_json(uid: str, request: Request):
+@app.get("/sub/{token}/json")
+async def sub_json(token: str, request: Request):
     db = await store.get()
-    ib = inbound_by_uid(db, uid)
+    ib = inbound_by_token(db, token)
     if not ib:
         raise HTTPException(404, "not-found")
     st = inbound_status(ib)
     configs = build_configs(request, db, ib)
     return JSONResponse({
         "name": ib["name"],
-        "uid": uid,
+        "uid": ib["uid"],
         "enabled": st["live_enabled"],
         "quota_gb": ib.get("quota_gb"),
         "used_gb": round(st["used"] / (1024 ** 3), 3),
@@ -2627,14 +2823,18 @@ async def sub_json(uid: str, request: Request):
 
 @app.get("/api/inbounds/{uid}/sub")
 async def api_inbound_sub_alias(uid: str, request: Request, user: str = Depends(require_auth)):
-    return await sub_json(uid, request)
+    db = await store.get()
+    ib = inbound_by_uid(db, uid)
+    if not ib:
+        raise HTTPException(404, "not-found")
+    return await sub_json(sub_token_of(ib), request)
 
 
 # ------------------------------------------------------------------ public status api
-@app.get("/api/status/{uid}")
-async def api_public_status(uid: str):
+@app.get("/api/status/{token}")
+async def api_public_status(token: str):
     db = await store.get()
-    ib = inbound_by_uid(db, uid)
+    ib = inbound_by_token(db, token)
     if not ib:
         raise HTTPException(404, "not-found")
     st = inbound_status(ib)

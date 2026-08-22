@@ -416,4 +416,15 @@ window.I18N = {
   rn_waiting: { fa: "در انتظار", en: "Waiting" },
   rn_approved: { fa: "تأیید شده", en: "Approved" },
   rn_rejected: { fa: "رد شده", en: "Rejected" },
+  // ---- v2.6.0: health checks and link rotation ----
+  rot_button: { fa: "چرخاندن لینک اشتراک", en: "Rotate subscription link" },
+  rot_hint: { fa: "اگر این لینک جایی لو رفت، با دکمه چرخش یک آدرس تازه بگیرید. کانفیگ‌های نصب‌شده روی دستگاه کاربر دست‌نخورده کار می‌کنند.", en: "If this link leaks, rotate it for a fresh address. Configs already installed on the customer's device keep working untouched." },
+  rot_confirm: { fa: "آدرس فعلی اشتراک از کار می‌افتد و باید آدرس تازه را به کاربر بدهید. کانفیگ‌های نصب‌شده کار می‌کنند. ادامه؟", en: "The current subscription URL stops working and you will need to send the user the new one. Installed configs keep working. Continue?" },
+  rot_done: { fa: "لینک اشتراک عوض شد — آدرس تازه را برای کاربر بفرستید", en: "Subscription link rotated — send the user the new address" },
+  hl_enable: { fa: "پایش خودکار سلامت", en: "Automatic health checks" },
+  hl_hint: { fa: "هر چند دقیقه لوکیشن‌ها تست می‌شوند و اگر یکی چند بار پشت‌سرهم جواب نداد، در تلگرام خبر می‌دهد.", en: "Probes each location periodically and reports to Telegram once one fails several times in a row." },
+  hl_interval: { fa: "فاصله (دقیقه)", en: "Interval (minutes)" },
+  hl_threshold: { fa: "بعد از چند خطای پیاپی", en: "Consecutive failures before alerting" },
+  hl_auto_disable: { fa: "غیرفعال کردن خودکار لوکیشن خراب", en: "Auto-disable a dead location" },
+  hl_auto_disable_hint: { fa: "لوکیشنی که جواب نمی‌دهد از لینک اشتراک کاربران حذف می‌شود.", en: "A location that stops responding is dropped from users' subscriptions." },
 };

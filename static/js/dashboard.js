@@ -41,6 +41,10 @@
     set('settingPanelName', s.panel_name || '');
     set('settingTelegram', s.telegram_contact || '');
     check('settingAllowPrivate', !!s.allow_private_destinations);
+    check('settingHealthEnabled', !!s.health_check_enabled);
+    set('settingHealthInterval', s.health_interval_minutes != null ? s.health_interval_minutes : 15);
+    set('settingHealthThreshold', s.health_fail_threshold != null ? s.health_fail_threshold : 3);
+    check('settingHealthAutoDisable', !!s.health_auto_disable);
     set('settingIdleTimeout', s.idle_timeout_seconds != null ? s.idle_timeout_seconds : 600);
     set('settingHistoryDays', s.history_days != null ? s.history_days : 30);
     set('settingBotToken', s.telegram_bot_token || '');
@@ -633,6 +637,33 @@
   });
 
 
+  // ---------------- link rotation ----------------
+  let linksModalUid = null;
+
+  $('rotateLinkBtn').addEventListener('click', async () => {
+    if (!linksModalUid) return;
+    if (!confirm(PEYK.t('rot_confirm'))) return;
+    const btn = $('rotateLinkBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      await PEYK.api(`/api/inbounds/${linksModalUid}/rotate-link`, { method: 'POST' });
+      PEYK.toast(PEYK.t('rot_done'), 'success', 5000);
+      await loadInbounds();
+      showLinks(linksModalUid);
+    } catch (e) {
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+  $('saveHealthBtn').addEventListener('click', () => {
+    saveSettings('saveHealthBtn', {
+      health_check_enabled: $('settingHealthEnabled').checked,
+      health_interval_minutes: parseInt($('settingHealthInterval').value, 10) || 15,
+      health_fail_threshold: parseInt($('settingHealthThreshold').value, 10) || 3,
+      health_auto_disable: $('settingHealthAutoDisable').checked,
+    });
+  });
+
   // ---------------- endpoints ----------------
   async function loadEndpoints() {
     try {
@@ -774,6 +805,7 @@
     PEYK.setLoading(btn, false);
     PEYK.toast(PEYK.t('ep_test_result').replace('{up}', up).replace('{total}', endpoints.length),
                  up === endpoints.length ? 'success' : 'info');
+    loadEndpoints();
   });
 
   // ---------------- traffic table ----------------
@@ -854,6 +886,7 @@
 
   // ---------------- links ----------------
   async function showLinks(uid) {
+    linksModalUid = uid;
     try {
       const r = await PEYK.api(`/api/inbounds/${uid}/links`);
       const configs = (r.links && r.links.configs) || [];
