@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 15  # v15: voucher codes
+SCHEMA_VERSION = 16  # v16: self-serve trials
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -281,6 +281,12 @@ def normalize_db(db: Dict[str, Any]) -> bool:
         if not isinstance(ib.get("ip_log"), dict):
             ib["ip_log"] = {}
             changed = True
+
+    # One trial per Telegram account, remembered even after retention
+    # deletes the trial itself.
+    if not isinstance(db.get("trial_claims"), dict):
+        db["trial_claims"] = {}
+        changed = True
 
     if not isinstance(db.get("vouchers"), list):
         db["vouchers"] = []

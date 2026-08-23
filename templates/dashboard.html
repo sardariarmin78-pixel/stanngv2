@@ -669,6 +669,13 @@
               <div class="small muted mb-16" data-i18n="rn_hint">کاربر در ربات دستور /renew می‌زند، برای شما پیامی با دکمه‌های تأیید می‌آید و با یک تپ تمدید انجام می‌شود. حجم مصرفی هم از نو شروع می‌شود.</div>
               <div class="setting-row">
                 <div>
+                  <div class="title" data-i18n="nt_customer">یادآوری به خودِ مشتری</div>
+                  <div class="hint" data-i18n="nt_customer_hint">همان هشدار حجم و انقضا، این بار به چت خود مشتری در ربات کاربران. فقط برای کسانی که خودشان اشتراکشان را به ربات وصل کرده‌اند.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingNotifyCustomer"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="setting-row">
+                <div>
                   <div class="title" data-i18n="sl_redeem_enable">فعال‌سازی با کد شارژ در ربات</div>
                   <div class="hint" data-i18n="sl_redeem_hint">مشتری با دستور /redeem کد خریدش را می‌زند و اشتراکش خودکار ساخته می‌شود. بدون کد معتبر هیچ‌کس نمی‌تواند چیزی بسازد.</div>
                 </div>
@@ -903,6 +910,13 @@
               <div class="setting-row">
                 <div class="title" data-i18n="trial_enable">فعال باشد</div>
                 <label class="switch"><input type="checkbox" id="settingTrialEnabled" checked><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="trial_selfserve">مشتری خودش بتواند تست بگیرد</div>
+                  <div class="hint" data-i18n="trial_selfserve_hint">با دستور /trial در ربات، بدون اینکه به شما پیام بدهد. هر اکانت تلگرام فقط یک بار — و کسی که اشتراک فعال دارد نمی‌تواند.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingTrialSelfserve"><span class="track"><span class="thumb"></span></span></label>
               </div>
               <div class="form-grid">
                 <div class="field">

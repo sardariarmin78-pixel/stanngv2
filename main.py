@@ -53,7 +53,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.4.1"
+APP_VERSION = "3.5.0"
 
 
 def _env_raw(name: str):
@@ -800,6 +800,86 @@ async def _scan_alerts(db) -> list:
     return due
 
 
+def _bound_chat_for(db, uid: str) -> Optional[str]:
+    """Which Telegram chat, if any, this subscription is bound to."""
+    for chat, bound_uid in (db.get("bot_bindings") or {}).items():
+        if bound_uid == uid:
+            return chat
+    return None
+
+
+async def _scan_customer_nudges(db) -> list:
+    """The same thresholds as the owner's alerts, addressed to the customer.
+
+    Only reaches people who bound their subscription to the bot themselves,
+    so this can never message someone who did not opt in.
+    """
+    settings = db.get("settings") or {}
+    if not settings.get("notify_customer_enabled"):
+        return []
+    if not (settings.get("userbot_enabled") and settings.get("userbot_token")):
+        return []
+
+    bindings = db.get("bot_bindings") or {}
+    if not bindings:
+        return []
+    by_uid = {}
+    for chat, uid in bindings.items():
+        by_uid.setdefault(uid, chat)
+
+    sent = db.get("alerts_sent") or {}
+    panel = brand(db)["panel_name"]
+    can_renew = bool(settings.get("userbot_renew_enabled"))
+    try:
+        threshold = max(1, min(100, int(settings.get("notify_quota_percent", 80))))
+    except (TypeError, ValueError):
+        threshold = 80
+    try:
+        expiry_days = max(0, min(60, int(settings.get("notify_expiry_days", 3))))
+    except (TypeError, ValueError):
+        expiry_days = 3
+
+    due = []
+    for ib in db["inbounds"]:
+        chat = by_uid.get(ib["uid"])
+        if not chat:
+            continue
+        st = inbound_status(ib)
+        uid = ib["uid"]
+        # A separate cooldown key from the owner's, so silencing one does not
+        # silence the other.
+        if st["quota_bytes"] > 0:
+            percent = st["used"] / st["quota_bytes"] * 100
+            if percent >= threshold and notify.should_alert(sent, uid, "cust-quota"):
+                due.append((uid, "cust-quota", chat, userbot.format_customer_quota(
+                    panel, ib["name"], st["used"], st["quota_bytes"], percent, can_renew)))
+        if st["days_left"] is not None and st["days_left"] <= expiry_days \
+                and not st["expired"] and notify.should_alert(sent, uid, "cust-expiry"):
+            due.append((uid, "cust-expiry", chat, userbot.format_customer_expiry(
+                panel, ib["name"], st["days_left"], can_renew)))
+    return due
+
+
+async def _deliver_customer_nudges(db) -> list:
+    """Returns the (uid, kind) pairs that actually went out."""
+    due = await _scan_customer_nudges(db)
+    if not due:
+        return []
+    token = ((db.get("settings") or {}).get("userbot_token") or "").strip()
+    delivered = []
+    for uid, kind, chat, message in due:
+        try:
+            await userbot.send(token, chat, message)
+            delivered.append((uid, kind))
+        except userbot.UserBotError:
+            # A customer who blocked the bot must not stall the whole queue,
+            # so this skips rather than breaking out like the owner loop does.
+            delivered.append((uid, kind))
+        except Exception:
+            break
+    return delivered
+
+
 async def _notify_loop():
     while True:
         try:
@@ -807,6 +887,16 @@ async def _notify_loop():
             if not _is_leader():
                 continue
             db = await store.get()
+
+            customer_delivered = await _deliver_customer_nudges(db)
+            if customer_delivered:
+                def _record_customer(db):
+                    sent = db.setdefault("alerts_sent", {})
+                    for uid, kind in customer_delivered:
+                        notify.record_alert(sent, uid, kind)
+                    notify.prune_alerts(sent)
+                await store.mutate(_record_customer, persist=False)
+
             token, chat, _ = _notify_config(db)
             if not token:
                 continue
@@ -944,6 +1034,8 @@ class _BotContext:
         settings = db.get("settings") or {}
         self.renew_enabled = bool(settings.get("userbot_renew_enabled"))
         self.voucher_enabled = bool(settings.get("voucher_redeem_enabled"))
+        self.trial_enabled = bool(settings.get("trial_selfserve_enabled")
+                                  and settings.get("trial_enabled", True))
 
     def lookup(self, uid: str):
         ib = inbound_by_uid(self.db, uid)
@@ -963,6 +1055,20 @@ class _BotContext:
             return "", []
         configs = build_configs_for_origin(self.db, ib, self.origin)
         return f"{self.origin}/sub/{sub_token_of(ib)}", configs
+
+    async def claim_trial(self, chat) -> dict:
+        """Give this chat its one free trial, config included."""
+        try:
+            ib = await claim_trial(chat)
+        except TrialError as e:
+            return {"error": e.reason}
+        # claim_trial binds the chat itself, so nothing to queue here.
+        configs = build_configs_for_origin(self.db, ib, self.origin)
+        return {
+            "inbound": ib,
+            "sub_url": f"{self.origin}/sub/{sub_token_of(ib)}",
+            "configs": configs,
+        }
 
     async def redeem(self, chat, code: str) -> dict:
         """Create the account a code paid for, and bind it to this chat."""
@@ -1864,6 +1970,7 @@ BOOL_SETTINGS = {
     "auto_backup_enabled", "userbot_enabled", "cleanup_enabled", "trial_enabled",
     "userbot_renew_enabled", "health_check_enabled", "health_auto_disable",
     "sharing_detect_enabled", "sharing_auto_disable", "voucher_redeem_enabled",
+    "trial_selfserve_enabled", "notify_customer_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
@@ -2470,6 +2577,44 @@ async def api_fragment_profiles(user: Identity = Depends(require_owner)):
             "resolved": fragments.as_param(db.get("settings") or {})}
 
 
+def build_trial(db, owner_id: Optional[str], existing: int) -> dict:
+    """The trial row itself, shared by the panel button and the bot command."""
+    settings = db.get("settings") or {}
+    try:
+        quota_gb = float(settings.get("trial_gb", 1) or 0)
+        days = max(1, int(settings.get("trial_days", 1) or 1))
+    except (TypeError, ValueError):
+        quota_gb, days = 1.0, 1
+    prefix = (settings.get("trial_prefix") or "trial").strip()[:40] or "trial"
+
+    now = time.time()
+    return {
+        "uid": gen_uid(),
+        "uuid": gen_uuid(),
+        "sub_token": gen_uid(),
+        "ip_log": {},
+        "owner": owner_id,
+        "name": f"{prefix}-{existing + 1:03d}",
+        "enabled": True,
+        "created_at": now,
+        "expire_at": now + days * 86400,
+        "expire_days": days,
+        "quota_gb": quota_gb,
+        "max_connections": 1,
+        "max_requests": 0,
+        "request_count": 0,
+        "used_up": 0,
+        "used_down": 0,
+        "history": [],
+        "fp": settings.get("default_fingerprint", "chrome"),
+        "strict_single_ip": False,
+        "note": "",
+        # Marks it disposable: retention deletes trials a day after expiry
+        # rather than keeping them for the full window.
+        "is_trial": True,
+    }
+
+
 @app.post("/api/inbounds/trial")
 async def api_create_trial(request: Request, user: Identity = Depends(require_auth)):
     """One-click throwaway account, sized from settings."""
@@ -2519,6 +2664,53 @@ async def api_create_trial(request: Request, user: Identity = Depends(require_au
 
     await store.mutate(_apply)
     return {"ok": True, "inbound": serialize_inbound(ib)}
+
+
+class TrialError(Exception):
+    """Refusal reason the bot can turn into a sentence."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+async def claim_trial(chat_id) -> dict:
+    """Hand a trial to a customer who asked the bot for one.
+
+    One per Telegram account, forever. A cooldown would just teach people to
+    wait; the point is to let someone try the service once, not to run a free
+    tier. The claim is remembered even after the trial itself is deleted by
+    retention, so the record has to outlive the subscription.
+    """
+    chat = str(chat_id)
+    result = {}
+
+    def _apply(db):
+        settings = db.get("settings") or {}
+        if not settings.get("trial_selfserve_enabled"):
+            raise TrialError("disabled")
+        if not settings.get("trial_enabled", True):
+            raise TrialError("disabled")
+        if chat in (db.get("trial_claims") or {}):
+            raise TrialError("already-claimed")
+        # Someone with a live subscription does not need a trial, and letting
+        # them take one is how a paying customer gets a second free account.
+        bound = (db.get("bot_bindings") or {}).get(chat)
+        if bound and inbound_by_uid(db, bound):
+            raise TrialError("already-subscribed")
+        if len(db["inbounds"]) >= MAX_INBOUNDS:
+            raise TrialError("panel-full")
+
+        existing = sum(1 for ib in db["inbounds"] if ib.get("is_trial"))
+        ib = build_trial(db, None, existing)
+        ib["note"] = f"self-serve trial · chat {chat}"
+        db["inbounds"].append(ib)
+        db.setdefault("trial_claims", {})[chat] = time.time()
+        db.setdefault("bot_bindings", {})[chat] = ib["uid"]
+        result.update(ib)
+
+    await store.mutate(_apply)
+    return result
 
 
 @app.get("/api/cleanup")

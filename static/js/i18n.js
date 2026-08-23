@@ -427,6 +427,11 @@ window.I18N = {
   hl_threshold: { fa: "بعد از چند خطای پیاپی", en: "Consecutive failures before alerting" },
   hl_auto_disable: { fa: "غیرفعال کردن خودکار لوکیشن خراب", en: "Auto-disable a dead location" },
   hl_auto_disable_hint: { fa: "لوکیشنی که جواب نمی‌دهد از لینک اشتراک کاربران حذف می‌شود.", en: "A location that stops responding is dropped from users' subscriptions." },
+  // ---- v3.5.0: customer comms ----
+  trial_selfserve: { fa: "مشتری خودش بتواند تست بگیرد", en: "Let customers claim their own trial" },
+  trial_selfserve_hint: { fa: "با دستور /trial در ربات، بدون اینکه به شما پیام بدهد. هر اکانت تلگرام فقط یک بار — و کسی که اشتراک فعال دارد نمی‌تواند.", en: "With /trial in the bot, without messaging you. One per Telegram account, and never for someone who already has a live subscription." },
+  nt_customer: { fa: "یادآوری به خودِ مشتری", en: "Remind the customer directly" },
+  nt_customer_hint: { fa: "همان هشدار حجم و انقضا، این بار به چت خود مشتری در ربات کاربران. فقط برای کسانی که خودشان اشتراکشان را به ربات وصل کرده‌اند.", en: "The same quota and expiry warnings, sent to the customer's own chat in the user bot. Only reaches people who bound their subscription themselves." },
   // ---- v3.4.0: interface polish ----
   ota_no_releases: { fa: "این ریپازیتوری هنوز نسخه‌ای (Release) منتشر نکرده، پس چیزی برای مقایسه نیست. در گیت‌هاب یک Release بسازید.", en: "This repository has never published a Release, so there is nothing to compare against. Create one on GitHub." },
   "rs_err_no-releases-published": { fa: "هیچ نسخه‌ای در گیت‌هاب منتشر نشده است", en: "No release has been published on GitHub" },
