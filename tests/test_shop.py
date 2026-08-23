@@ -14,6 +14,20 @@ from conftest import reset_panel
 import main
 import userbot
 
+
+def reply_text(reply):
+    """The words of a reply, without the keyboard wrapped around it.
+
+    handle_message returns {text, keyboard} so no branch can forget the menu;
+    these assertions are about the words, so they unwrap here.
+    """
+    if reply is None:
+        return None
+    return reply["text"] if isinstance(reply, dict) else reply
+
+
+
+
 ADMIN = {"username": "shopadmin", "password": "correct horse battery"}
 USER_TOKEN = "123456789:AAFakeUserBotTokenForTests_012345678"
 ALERT_TOKEN = "987654321:AAFakeAlertBotTokenForTests_012345"
@@ -307,7 +321,7 @@ async def test_buy_is_refused_while_the_shop_is_off(client, anyio_backend):
         def bound_uid(self, chat):
             return None
 
-    reply = await userbot.handle_message({"chat": {"id": 1}, "text": "/buy"}, Ctx())
+    reply = reply_text(await userbot.handle_message({"chat": {"id": 1}, "text": "/buy"}, Ctx()))
     assert "فعال نیست" in reply
 
 
@@ -331,7 +345,7 @@ async def test_buy_says_so_when_no_plan_is_priced(client, anyio_backend):
         def bound_uid(self, chat):
             return None
 
-    reply = await userbot.handle_message({"chat": {"id": 1}, "text": "/buy"}, Ctx())
+    reply = reply_text(await userbot.handle_message({"chat": {"id": 1}, "text": "/buy"}, Ctx()))
     assert "پلنی" in reply
     assert sent == []
 

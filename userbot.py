@@ -311,6 +311,82 @@ def format_customer_expiry(panel: str, name: str, days_left: int,
     )
 
 
+
+# ------------------------------------------------------------------ main menu
+"""
+Buttons, not typed commands.
+
+A customer who has to remember /status and /config will message the seller
+instead, which defeats the point of a self-service bot. Every reply carries
+the menu, so there is always something to tap and nothing to memorise.
+"""
+
+# Both the label and the callback live here so a rename cannot desync them.
+MENU_BOUND = [
+    [("📊 وضعیت اشتراک", "m:status"), ("📱 دریافت کانفیگ", "m:config")],
+    [("🔄 تمدید", "m:renew"), ("🎁 دعوت دوستان", "m:invite")],
+    [("🛒 خرید اشتراک جدید", "m:buy")],
+]
+
+MENU_UNBOUND = [
+    [("🎁 تست رایگان", "m:trial"), ("🛒 خرید اشتراک", "m:buy")],
+    [("🔑 وصل کردن اشتراک", "m:bind")],
+]
+
+
+def main_menu(bound: bool, *, trial_enabled: bool = True,
+              shop_enabled: bool = True, renew_enabled: bool = True,
+              referral_enabled: bool = True) -> list:
+    """The keyboard for this customer, minus whatever the seller turned off.
+
+    A button that answers "that is not available" is worse than no button, so
+    disabled features are dropped rather than shown and refused.
+    """
+    allowed = {
+        "m:trial": trial_enabled,
+        "m:buy": shop_enabled,
+        "m:renew": renew_enabled,
+        "m:invite": referral_enabled,
+    }
+    source = MENU_BOUND if bound else MENU_UNBOUND
+    keyboard = []
+    for row in source:
+        kept = [{"text": label, "callback_data": data}
+                for label, data in row if allowed.get(data, True)]
+        if kept:
+            keyboard.append(kept)
+    return keyboard
+
+
+def with_menu(text: str, ctx, bound: bool) -> dict:
+    """Wrap a reply so the poller sends it with the keyboard attached."""
+    return {
+        "text": text,
+        "keyboard": main_menu(
+            bound,
+            trial_enabled=getattr(ctx, "trial_enabled", True),
+            shop_enabled=getattr(ctx, "shop_enabled", True),
+            renew_enabled=getattr(ctx, "renew_enabled", True),
+            referral_enabled=getattr(ctx, "referral_enabled", True),
+        ),
+    }
+
+
+MENU_COMMANDS = {
+    "m:status": "status",
+    "m:config": "config",
+    "m:renew": "renew",
+    "m:invite": "invite",
+    "m:trial": "trial",
+    "m:buy": "buy",
+}
+
+
+def menu_command(data: str) -> Optional[str]:
+    """Turn a menu tap back into the command it stands for."""
+    return MENU_COMMANDS.get(data or "")
+
+
 # ------------------------------------------------------------------ dispatch
 def parse_command(text: str) -> tuple:
     """Split '/cmd@BotName arg' into (cmd, arg). Not a command -> ('', text)."""
@@ -322,7 +398,24 @@ def parse_command(text: str) -> tuple:
     return cmd, rest.strip()
 
 
-async def handle_message(message: dict, ctx) -> Optional[str]:
+async def handle_message(message: dict, ctx):
+    """Reply to one message, with the menu attached.
+
+    Returns a dict of {text, keyboard}, or None to stay silent. The inner
+    function decides what to say; this decides how it is presented, so no
+    branch can forget the keyboard.
+    """
+    chat = (message.get("chat") or {}).get("id")
+    reply = await _reply_for(message, ctx)
+    if reply is None:
+        return None
+    if isinstance(reply, dict):
+        return reply
+    bound = bool(ctx.bound_uid(chat)) if chat is not None else False
+    return with_menu(reply, ctx, bound)
+
+
+async def _reply_for(message: dict, ctx) -> Optional[str]:
     """Turn one incoming message into a reply, or None to stay silent.
 
     `ctx` supplies the panel side: lookup(uid), bind(chat, uid),

@@ -14,6 +14,18 @@ from conftest import reset_panel
 
 import main
 
+
+def reply_text(reply):
+    """The words of a reply, without the keyboard wrapped around it.
+
+    handle_message returns {text, keyboard} so no branch can forget the menu;
+    these assertions are about the words, so they unwrap here.
+    """
+    if reply is None:
+        return None
+    return reply["text"] if isinstance(reply, dict) else reply
+
+
 ADMIN = {"username": "cmadmin", "password": "correct horse battery"}
 SELLER = {"username": "cm_seller", "password": "seller-pass-1234"}
 
@@ -380,9 +392,11 @@ def msg(text, chat=42):
 @pytest.mark.anyio
 async def test_the_bot_hands_back_a_config_on_success(anyio_backend):
     import userbot
+
+
     ctx = _Ctx({"inbound": {"name": "x"}, "sub_url": "https://e.com/sub/t",
                 "configs": [{"label": "Main", "link": "vless://abc"}]})
-    reply = await userbot.handle_message(msg("/redeem ABCD-EFGH-JKLM"), ctx)
+    reply = reply_text(await userbot.handle_message(msg("/redeem ABCD-EFGH-JKLM"), ctx))
 
     assert "فعال شد" in reply
     assert "vless://abc" in reply
@@ -392,15 +406,15 @@ async def test_the_bot_hands_back_a_config_on_success(anyio_backend):
 @pytest.mark.anyio
 async def test_the_bot_explains_a_used_code(anyio_backend):
     import userbot
-    reply = await userbot.handle_message(msg("/redeem ABCD-EFGH-JKLM"),
-                                         _Ctx({"error": "already-used"}))
+    reply = reply_text(await userbot.handle_message(
+        msg("/redeem ABCD-EFGH-JKLM"), _Ctx({"error": "already-used"})))
     assert "قبلاً استفاده شده" in reply
 
 
 @pytest.mark.anyio
 async def test_the_bot_asks_for_the_code_when_missing(anyio_backend):
     import userbot
-    reply = await userbot.handle_message(msg("/redeem"), _Ctx({}))
+    reply = reply_text(await userbot.handle_message(msg("/redeem"), _Ctx({})))
     assert "/redeem" in reply
 
 
@@ -409,7 +423,7 @@ async def test_the_bot_refuses_while_the_feature_is_off(anyio_backend):
     import userbot
     ctx = _Ctx({})
     ctx.voucher_enabled = False
-    reply = await userbot.handle_message(msg("/redeem ABCD-EFGH-JKLM"), ctx)
+    reply = reply_text(await userbot.handle_message(msg("/redeem ABCD-EFGH-JKLM"), ctx))
     assert "فعال نیست" in reply
     assert ctx.calls == []
 

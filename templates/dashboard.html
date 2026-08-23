@@ -773,8 +773,12 @@
             <div class="win-head"><h3><svg><use href="#icon-settings"/></svg><span data-i18n="settings_title">تنظیمات عمومی</span></h3></div>
             <div class="win-body">
               <div class="field">
-                <label data-i18n="settings_public_domain">دامنه عمومی (اختیاری، خالی = تشخیص خودکار)</label>
-                <input class="input" type="text" id="settingPublicDomain" placeholder="example.up.railway.app" style="direction:ltr;">
+                <label data-i18n="settings_public_domain">آدرس عمومی پنل</label>
+                <div class="flex gap-8">
+                  <input class="input" type="text" id="settingPublicDomain" placeholder="peyk.up.railway.app" style="direction:ltr; flex:1;">
+                  <button type="button" class="btn btn-sm" id="useCurrentDomainBtn" style="flex:none;"><span data-i18n="settings_domain_use_current">همین آدرس</span></button>
+                </div>
+                <div class="small muted mt-8" data-i18n="settings_public_domain_hint">همان آدرسی که الان این صفحه با آن باز شده — فقط دامنه، بدون ‎https://‎ و بدون / آخر. ربات و لینک‌های اشتراک از این استفاده می‌کنند؛ چون ربات درخواستی از مرورگر ندارد، خودش نمی‌تواند حدس بزند.</div>
               </div>
               <div class="field">
                 <label data-i18n="settings_ota_repo">مخزن گیت‌هاب برای آپدیت</label>

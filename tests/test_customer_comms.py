@@ -14,6 +14,20 @@ from conftest import reset_panel
 import main
 import userbot
 
+
+def reply_text(reply):
+    """The words of a reply, without the keyboard wrapped around it.
+
+    handle_message returns {text, keyboard} so no branch can forget the menu;
+    these assertions are about the words, so they unwrap here.
+    """
+    if reply is None:
+        return None
+    return reply["text"] if isinstance(reply, dict) else reply
+
+
+
+
 ADMIN = {"username": "ccadmin", "password": "correct horse battery"}
 GB = 1024 ** 3
 
@@ -263,21 +277,21 @@ def msg(text, chat=42):
 async def test_the_bot_hands_over_the_trial_config(anyio_backend):
     ctx = _Ctx({"inbound": {"name": "trial-001"}, "sub_url": "https://e.com/sub/t",
                 "configs": [{"label": "Main", "link": "vless://abc"}]})
-    reply = await userbot.handle_message(msg("/trial"), ctx)
+    reply = reply_text(await userbot.handle_message(msg("/trial"), ctx))
     assert "vless://abc" in reply
     assert ctx.calls == [42]
 
 
 @pytest.mark.anyio
 async def test_the_bot_explains_a_repeat_claim(anyio_backend):
-    reply = await userbot.handle_message(msg("/trial"), _Ctx({"error": "already-claimed"}))
+    reply = reply_text(await userbot.handle_message(msg("/trial"), _Ctx({"error": "already-claimed"})))
     assert "قبلاً" in reply
 
 
 @pytest.mark.anyio
 async def test_the_bot_points_an_existing_customer_at_status(anyio_backend):
-    reply = await userbot.handle_message(msg("/trial"),
-                                         _Ctx({"error": "already-subscribed"}))
+    reply = reply_text(await userbot.handle_message(
+        msg("/trial"), _Ctx({"error": "already-subscribed"})))
     assert "/status" in reply
 
 
@@ -285,7 +299,7 @@ async def test_the_bot_points_an_existing_customer_at_status(anyio_backend):
 async def test_the_bot_refuses_while_self_serve_is_off(anyio_backend):
     ctx = _Ctx({})
     ctx.trial_enabled = False
-    reply = await userbot.handle_message(msg("/trial"), ctx)
+    reply = reply_text(await userbot.handle_message(msg("/trial"), ctx))
     assert "فعال نیست" in reply
     assert ctx.calls == []
 
