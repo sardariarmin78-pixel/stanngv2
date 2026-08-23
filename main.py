@@ -55,7 +55,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.8.1"
+APP_VERSION = "3.9.0"
 
 
 def _env_raw(name: str):
@@ -1339,9 +1339,14 @@ async def _userbot_loop():
             for callback in callbacks:
                 await _handle_bot_callback(callback, ctx)
 
-            for chat, text in replies:
+            for chat, reply in replies:
                 try:
-                    await userbot.send(token, chat, text)
+                    if isinstance(reply, dict) and reply.get("keyboard"):
+                        await userbot.send_with_buttons(
+                            token, chat, reply["text"], reply["keyboard"])
+                    else:
+                        text = reply["text"] if isinstance(reply, dict) else reply
+                        await userbot.send(token, chat, text)
                 except userbot.UserBotError:
                     pass
         except asyncio.CancelledError:
@@ -1656,9 +1661,72 @@ async def _dispatch_order(order: dict):
     await store.mutate(_apply, persist=False)
 
 
+async def _handle_menu_callback(callback: dict, ctx):
+    """A menu tap runs the command it stands for.
+
+    Re-using the message path rather than duplicating each flow means a button
+    and its typed equivalent can never drift apart.
+    """
+    data = callback.get("data") or ""
+    chat = ((callback.get("message") or {}).get("chat") or {}).get("id")
+    command = userbot.menu_command(data)
+
+    db = await store.get()
+    settings = db.get("settings") or {}
+    token = (settings.get("userbot_token") or "").strip()
+    if not token or chat is None or not command:
+        return
+
+    # Clears the spinner Telegram shows on the tapped button.
+    try:
+        await userbot.answer_callback(token, callback.get("id", ""))
+    except userbot.UserBotError:
+        pass
+
+    if ctx is None:
+        ctx = _BotContext(db, _bot_origin(db))
+
+    reply = await userbot.handle_message(
+        {"chat": {"id": chat}, "text": f"/{command}"}, ctx)
+    if not reply:
+        return
+
+    # A tap can bind a chat or open an order just as a typed command can, so
+    # the same follow-through has to run here too.
+    pending_binds = dict(ctx.pending_binds)
+    pending_selection = dict(ctx.pending_selection)
+
+    if pending_binds or pending_selection:
+        def _apply(db):
+            if pending_binds:
+                bindings = db.setdefault("bot_bindings", {})
+                bindings.update(pending_binds)
+                userbot.prune_bindings(bindings)
+            if pending_selection:
+                sel = db.setdefault("shop_selections", {})
+                sel.update(pending_selection)
+                _prune_selections(sel)
+
+        await store.mutate(_apply)
+        ctx.pending_binds.clear()
+        ctx.pending_selection.clear()
+
+    try:
+        if isinstance(reply, dict) and reply.get("keyboard"):
+            await userbot.send_with_buttons(token, chat, reply["text"], reply["keyboard"])
+        else:
+            await userbot.send(token, chat,
+                               reply["text"] if isinstance(reply, dict) else reply)
+    except userbot.UserBotError:
+        pass
+
+
 async def _handle_bot_callback(callback: dict, ctx=None):
     """Route a button tap to whichever flow owns it."""
     data = callback.get("data") or ""
+    if data.startswith("m:"):
+        await _handle_menu_callback(callback, ctx)
+        return
     if data.startswith("buy:"):
         await _handle_shop_callback(callback, ctx)
         return

@@ -11,7 +11,21 @@ from fastapi.testclient import TestClient
 from conftest import reset_panel
 
 import main
+
+
 import userbot
+
+
+def reply_text(reply):
+    """The words of a reply, without the keyboard wrapped around it.
+
+    handle_message returns {text, keyboard} so no branch can forget the menu;
+    these assertions are about the words, so they unwrap here.
+    """
+    if reply is None:
+        return None
+    return reply["text"] if isinstance(reply, dict) else reply
+
 
 ADMIN = {"username": "botadmin", "password": "correct horse battery"}
 
@@ -70,7 +84,8 @@ def user(name="Ali", **status):
 
 
 async def reply(text, ctx, chat=555):
-    return await userbot.handle_message({"chat": {"id": chat}, "text": text}, ctx)
+    return reply_text(
+        await userbot.handle_message({"chat": {"id": chat}, "text": text}, ctx))
 
 
 # ------------------------------------------------------------------ parsing
@@ -344,3 +359,127 @@ def test_userbot_endpoints_require_auth():
         assert c.get("/api/userbot").status_code == 401
         assert c.post("/api/userbot/test").status_code == 401
         assert c.post("/api/userbot/unbind/x").status_code == 401
+
+
+# ------------------------------------------------------------------ menu
+"""
+Buttons on every reply.
+
+A customer who has to remember /status and /config messages the seller
+instead, which defeats the point of a self-service bot.
+"""
+
+
+class MenuCtx:
+    panel_name = "Peyk"
+    renew_enabled = True
+    shop_enabled = True
+    trial_enabled = True
+    referral_enabled = True
+
+    def __init__(self, bound=None):
+        self._bound = bound
+
+    def bound_uid(self, chat):
+        return self._bound
+
+    def lookup(self, uid):
+        return None
+
+
+def labels(keyboard):
+    return [b["text"] for row in keyboard for b in row]
+
+
+def actions(keyboard):
+    return [b["callback_data"] for row in keyboard for b in row]
+
+
+def test_every_reply_carries_a_keyboard():
+    reply = client_reply("/help", MenuCtx())
+    assert reply["keyboard"], "a reply with no buttons is the thing being fixed"
+    assert reply["text"]
+
+
+def client_reply(text, ctx, chat=42):
+    import anyio
+    return anyio.run(userbot.handle_message, {"chat": {"id": chat}, "text": text}, ctx)
+
+
+def test_an_unbound_customer_is_offered_a_way_in():
+    """Nothing to check the status of yet, so the buttons have to be about
+    getting started."""
+    acts = actions(client_reply("/start", MenuCtx(bound=None))["keyboard"])
+    assert "m:trial" in acts
+    assert "m:buy" in acts
+    assert "m:status" not in acts
+
+
+def test_a_bound_customer_gets_the_everyday_actions():
+    acts = actions(client_reply("/help", MenuCtx(bound="abc"))["keyboard"])
+    assert "m:status" in acts
+    assert "m:config" in acts
+    assert "m:renew" in acts
+    assert "m:bind" not in acts
+
+
+def test_a_disabled_feature_is_not_offered():
+    """A button that answers "not available" is worse than no button."""
+    ctx = MenuCtx(bound="abc")
+    ctx.renew_enabled = False
+    ctx.shop_enabled = False
+    acts = actions(client_reply("/help", ctx)["keyboard"])
+    assert "m:renew" not in acts
+    assert "m:buy" not in acts
+    assert "m:status" in acts       # the rest survives
+
+
+def test_turning_everything_off_leaves_a_usable_menu():
+    ctx = MenuCtx(bound="abc")
+    ctx.renew_enabled = ctx.shop_enabled = ctx.trial_enabled = False
+    ctx.referral_enabled = False
+    kb = client_reply("/help", ctx)["keyboard"]
+    assert actions(kb) == ["m:status", "m:config"]
+    assert all(row for row in kb), "no empty rows"
+
+
+def test_an_unbound_customer_with_nothing_enabled_still_gets_bind():
+    ctx = MenuCtx(bound=None)
+    ctx.trial_enabled = ctx.shop_enabled = False
+    assert actions(client_reply("/start", ctx)["keyboard"]) == ["m:bind"]
+
+
+@pytest.mark.parametrize("data,command", [
+    ("m:status", "status"), ("m:config", "config"), ("m:renew", "renew"),
+    ("m:invite", "invite"), ("m:trial", "trial"), ("m:buy", "buy"),
+])
+def test_each_button_maps_to_its_command(data, command):
+    """Buttons run the same code as the typed command, so the two cannot
+    drift apart."""
+    assert userbot.menu_command(data) == command
+
+
+def test_an_unknown_callback_maps_to_nothing():
+    assert userbot.menu_command("m:nonsense") is None
+    assert userbot.menu_command("buy:123") is None
+    assert userbot.menu_command("") is None
+    assert userbot.menu_command(None) is None
+
+
+def test_labels_are_human_not_slash_commands():
+    """The point is that nobody has to know the commands exist."""
+    for label in labels(main_menu_for(bound=True)):
+        assert not label.startswith("/")
+        assert len(label) > 2
+
+
+def main_menu_for(bound):
+    return userbot.main_menu(bound)
+
+
+def test_the_keyboard_shape_is_what_telegram_expects():
+    for row in main_menu_for(bound=True):
+        assert isinstance(row, list)
+        for button in row:
+            assert set(button) == {"text", "callback_data"}
+            assert len(button["callback_data"].encode()) <= 64

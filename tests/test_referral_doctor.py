@@ -13,6 +13,20 @@ from conftest import reset_panel
 import main
 import userbot
 
+
+def reply_text(reply):
+    """The words of a reply, without the keyboard wrapped around it.
+
+    handle_message returns {text, keyboard} so no branch can forget the menu;
+    these assertions are about the words, so they unwrap here.
+    """
+    if reply is None:
+        return None
+    return reply["text"] if isinstance(reply, dict) else reply
+
+
+
+
 ADMIN = {"username": "refadmin", "password": "correct horse battery"}
 USER_TOKEN = "123456789:AAFakeUserBotTokenForTests_012345678"
 ALERT_TOKEN = "987654321:AAFakeAlertBotTokenForTests_012345"
@@ -279,8 +293,8 @@ def test_invite_needs_a_subscription(client):
         def bound_uid(self, chat):
             return None
 
-    reply = client.portal.call(userbot.handle_message,
-                               {"chat": {"id": 1}, "text": "/invite"}, Ctx())
+    reply = reply_text(client.portal.call(
+        userbot.handle_message, {"chat": {"id": 1}, "text": "/invite"}, Ctx()))
     assert "/bind" in reply
 
 

@@ -230,11 +230,21 @@ const PEYK = (() => {
     if (!btn) return;
     btn.classList.toggle('is-loading', loading);
     btn.disabled = loading;
-    if (loading && !btn.querySelector('.spin')) {
-      const spin = document.createElement('span');
-      spin.className = 'spin spinner on-dark';
-      btn.appendChild(spin);
+
+    const existing = btn.querySelector('.spin');
+    if (loading) {
+      if (!existing) {
+        const spin = document.createElement('span');
+        spin.className = 'spin spinner on-dark';
+        btn.appendChild(spin);
+      }
+      return;
     }
+    // Taking the spinner back out is the half that used to be missing. The
+    // class came off so the label reappeared, but the spinner stayed in the
+    // DOM turning forever -- and because the next call found one already
+    // there, every later click looked like it had hung.
+    if (existing) existing.remove();
   }
 
   function shake(el) {

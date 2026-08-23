@@ -147,7 +147,10 @@ window.I18N = {
 
   // ---- settings ----
   settings_title: { fa: 'تنظیمات عمومی', en: 'General Settings' },
-  settings_public_domain: { fa: 'دامنه عمومی (اختیاری، خالی = تشخیص خودکار)', en: 'Public Domain (optional, blank = auto-detect)' },
+  settings_public_domain: { fa: 'آدرس عمومی پنل', en: 'Public address of this panel' },
+  settings_public_domain_hint: { fa: "همان آدرسی که الان این صفحه با آن باز شده — فقط دامنه، بدون ‎https://‎ و بدون / آخر. ربات و لینک‌های اشتراک از این استفاده می‌کنند؛ چون ربات درخواستی از مرورگر ندارد، خودش نمی‌تواند حدس بزند.", en: "The address this page is open at right now — the domain only, no https:// and no trailing slash. The bot and your subscription links are built from it; the bot has no browser request to infer it from, so it cannot guess." },
+  settings_domain_use_current: { fa: "همین آدرس", en: "Use current" },
+  settings_domain_filled: { fa: "آدرس فعلی گذاشته شد — یادت باشد ذخیره کنی", en: "Filled from the current address — remember to save" },
   settings_keepalive: { fa: 'سیستم بیدارباش (Keep-Alive)', en: 'Keep-Alive System' },
   settings_keepalive_hint: { fa: 'هر ۱۰ دقیقه یک بار پینگ داخلی برای جلوگیری از خواب رفتن سرویس', en: 'Pings itself every 10 minutes to prevent free-tier sleep' },
   settings_ota_repo: { fa: 'مخزن گیت‌هاب برای آپدیت', en: 'GitHub Repo for Updates' },

@@ -844,6 +844,14 @@
   $('dxRefresh').addEventListener('click', loadDiagnostics);
 
 
+  /* The commonest confusion in setup: people paste a whole URL, or leave the
+     field blank because the old label said optional, and then the bot hands
+     out links pointing nowhere. One button removes the guesswork. */
+  $('useCurrentDomainBtn').addEventListener('click', () => {
+    $('settingPublicDomain').value = window.location.host;
+    PEYK.toast(PEYK.t('settings_domain_filled'), 'success');
+  });
+
   // ---------------- import from another panel ----------------
   /* Two steps on purpose. A migration is the one action an admin cannot undo
      by hand -- nobody unpicks a thousand wrong rows -- so nothing is written
