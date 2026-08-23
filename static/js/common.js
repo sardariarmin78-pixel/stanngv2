@@ -142,6 +142,51 @@ const PEYK = (() => {
     return data;
   }
 
+  // ---------------- number count-up ----------------
+  /* Figures that snap read as a page reloading; figures that climb read as a
+     live reading. Only worth it on the dashboard tiles, and only when the
+     jump is big enough to notice. */
+  const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function countUp(el, to, format) {
+    if (!el) return;
+    format = format || ((v) => String(Math.round(v)));
+    const from = Number(el.dataset.value || 0);
+    to = Number(to) || 0;
+    el.dataset.value = to;
+
+    // A one-step change is not worth animating.
+    if (REDUCED || Math.abs(to - from) < 2) { el.textContent = format(to); return; }
+
+    const start = performance.now();
+    const dur = 620;
+    if (el._countRaf) cancelAnimationFrame(el._countRaf);
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / dur);
+      const eased = 1 - Math.pow(1 - t, 3);
+      el.textContent = format(from + (to - from) * eased);
+      el._countRaf = t < 1 ? requestAnimationFrame(step) : null;
+    };
+    el._countRaf = requestAnimationFrame(step);
+  }
+
+  // ---------------- skeletons ----------------
+  /* Shown while the first payload is in flight. A table that snaps from empty
+     to full reads as broken; one that is visibly loading reads as fast. */
+  function skeletonRows(tbody, rows, cols) {
+    if (!tbody) return;
+    let html = '';
+    for (let r = 0; r < rows; r++) {
+      html += '<tr class="skeleton-row">';
+      for (let c = 0; c < cols; c++) {
+        const w = c === 0 ? 42 : (c === cols - 1 ? 26 : 60);
+        html += `<td><div class="skeleton skeleton-line" style="width:${w}%"></div></td>`;
+      }
+      html += '</tr>';
+    }
+    tbody.innerHTML = html;
+  }
+
   // ---------------- ripple ----------------
   function attachRipple(el) {
     el.addEventListener('click', function (e) {
@@ -272,6 +317,7 @@ const PEYK = (() => {
     getLang, setLang, t, translatePage,
     toast, api, initRipples, attachRipple, initSparkles,
     setLoading, shake, fmtBytes, fmtDuration, fmtAgo, escapeHtml,
+    countUp, skeletonRows,
   };
 })();
 
