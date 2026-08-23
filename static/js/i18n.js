@@ -427,6 +427,8 @@ window.I18N = {
   hl_threshold: { fa: "بعد از چند خطای پیاپی", en: "Consecutive failures before alerting" },
   hl_auto_disable: { fa: "غیرفعال کردن خودکار لوکیشن خراب", en: "Auto-disable a dead location" },
   hl_auto_disable_hint: { fa: "لوکیشنی که جواب نمی‌دهد از لینک اشتراک کاربران حذف می‌شود.", en: "A location that stops responding is dropped from users' subscriptions." },
+  // ---- v3.4.0: interface polish ----
+  more: { fa: "بیشتر", en: "More" },
   // ---- v3.3.0: import from other panels ----
   im_title: { fa: "ورود کاربران از پنل دیگر", en: "Import users from another panel" },
   im_hint: { fa: "فایل خروجی Marzban یا 3x-ui (یا پشتیبان پیک) را بده. اول نشان می‌دهد چه چیزی وارد می‌شود، بعد از تأیید تو انجام می‌دهد.", en: "Give it a Marzban or 3x-ui export (or a Peyk backup). It shows you what would come in, and only writes once you confirm." },

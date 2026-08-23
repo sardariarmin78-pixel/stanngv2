@@ -658,3 +658,153 @@ tbody td b { color: var(--text-0); font-weight: 600; }
   .shell-main { margin: 0; }
   .win { border-color: #ccc; box-shadow: none; }
 }
+
+/* ---------------- overflow menu ----------------
+   Seven equal-weight icons per row read as noise. Two live actions stay
+   visible and the rest move behind one button, so the eye lands on the data
+   instead of the controls. */
+.row-menu { position: relative; display: inline-flex; }
+.row-menu-pop {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  min-width: 172px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-pop);
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+}
+.row-menu.open .row-menu-pop { display: flex; }
+/* Near the bottom of a table the menu would be clipped, so it flips up. */
+.row-menu.flip-up .row-menu-pop { top: auto; bottom: calc(100% + 4px); }
+.row-menu-pop button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: start;
+  cursor: pointer;
+}
+.row-menu-pop button:hover { background: var(--bg-3); color: var(--text-0); }
+.row-menu-pop button svg { width: 15px; height: 15px; flex: none; color: var(--text-2); }
+.row-menu-pop button:hover svg { color: inherit; }
+.row-menu-pop button.danger { color: var(--err); }
+.row-menu-pop button.danger svg { color: var(--err); }
+.row-menu-pop hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--border); }
+
+/* ---------------- skeletons ----------------
+   Shown while the first payload is in flight. A table that snaps from empty
+   to full reads as broken; one that is visibly loading reads as fast. */
+.skeleton {
+  background: linear-gradient(90deg,
+    var(--bg-3) 25%, var(--bg-4) 37%, var(--bg-3) 63%);
+  background-size: 400% 100%;
+  border-radius: var(--radius-sm);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from { background-position: 100% 50%; }
+  to { background-position: 0 50%; }
+}
+.skeleton-line { height: 11px; }
+.skeleton-row td { padding: 13px 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+/* ---------------- row entrance ----------------
+   Staggered by a few frames each so a refreshed table resolves instead of
+   flashing. Capped at eight rows: past that it stops reading as one motion. */
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+tbody tr.row-enter { animation: row-in var(--dur-mid) var(--ease-out) both; }
+tbody tr.row-enter:nth-child(1) { animation-delay: 0ms; }
+tbody tr.row-enter:nth-child(2) { animation-delay: 22ms; }
+tbody tr.row-enter:nth-child(3) { animation-delay: 44ms; }
+tbody tr.row-enter:nth-child(4) { animation-delay: 66ms; }
+tbody tr.row-enter:nth-child(5) { animation-delay: 88ms; }
+tbody tr.row-enter:nth-child(6) { animation-delay: 110ms; }
+tbody tr.row-enter:nth-child(7) { animation-delay: 132ms; }
+tbody tr.row-enter:nth-child(n+8) { animation-delay: 154ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  tbody tr.row-enter { animation: none; }
+}
+
+/* ---------------- empty states ----------------
+   A single flat glyph reads as a missing image. The disc behind it makes it
+   deliberate. */
+.empty-state .empty-art {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 62px;
+  height: 62px;
+  margin-bottom: 14px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+}
+.empty-state .empty-art svg {
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  color: var(--text-2);
+}
+
+/* ---------------- login ----------------
+   The first thing a customer's seller sees, and previously the plainest page
+   in the panel. */
+.auth-shell { position: relative; overflow: hidden; }
+.auth-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(680px 340px at 50% -8%, var(--accent-dim), transparent 70%),
+    radial-gradient(520px 300px at 50% 108%, var(--accent-dim), transparent 72%);
+  pointer-events: none;
+}
+/* Hairline grid, faded out at the edges so it never competes with the card. */
+.auth-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 46px 46px;
+  opacity: 0.4;
+  mask-image: radial-gradient(circle at 50% 45%, #000 15%, transparent 72%);
+  -webkit-mask-image: radial-gradient(circle at 50% 45%, #000 15%, transparent 72%);
+  pointer-events: none;
+}
+.auth-card {
+  position: relative;
+  z-index: 1;
+  background: var(--bg-2);
+  animation: auth-in 420ms var(--ease-out) both;
+}
+@keyframes auth-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-card { animation: none; }
+}

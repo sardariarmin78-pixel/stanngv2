@@ -239,8 +239,8 @@
       $('statTotalTraffic').textContent = PEYK.fmtBytes((s.total_up || 0) + (s.total_down || 0));
       $('statUp').textContent = PEYK.fmtBytes(s.total_up || 0);
       $('statDown').textContent = PEYK.fmtBytes(s.total_down || 0);
-      $('statActiveConn').textContent = s.active_connections || 0;
-      $('statInboundCount').textContent = s.inbounds_count || 0;
+      PEYK.countUp($('statActiveConn'), s.active_connections || 0);
+      PEYK.countUp($('statInboundCount'), s.inbounds_count || 0);
       $('navInboundCount').textContent = s.inbounds_count || 0;
       $('trafficUp').textContent = PEYK.fmtBytes(s.total_up || 0);
       $('trafficDown').textContent = PEYK.fmtBytes(s.total_down || 0);
@@ -330,7 +330,10 @@
   $('quickBulkBtn').addEventListener('click', () => { showView('inbounds'); openBulkModal(); });
 
   // ---------------- users ----------------
+  let inboundsLoaded = false;
+
   async function loadInbounds() {
+    if (!inboundsLoaded) PEYK.skeletonRows($('inboundsTableBody'), 6, 7);
     try {
       const r = await PEYK.api('/api/inbounds');
       inbounds = r.inbounds || [];
@@ -338,12 +341,15 @@
       // Drop selections for rows that no longer exist.
       const live = new Set(inbounds.map(i => i.uid));
       [...selected].forEach(uid => { if (!live.has(uid)) selected.delete(uid); });
+      animateRows = !inboundsLoaded;
+      inboundsLoaded = true;
       renderInbounds();
+      animateRows = false;
       renderTrafficTable();
       $('navInboundCount').textContent = inbounds.length;
       const soon = inbounds.filter(i => i.status.days_left != null
         && i.status.days_left <= 7 && !i.status.expired).length;
-      $('statExpiring').textContent = soon;
+      PEYK.countUp($('statExpiring'), soon);
     } catch (e) {
       if (e.status === 401) { window.location.href = '/login'; return; }
       PEYK.toast(e.detail || 'error', 'error');
@@ -396,6 +402,10 @@
     });
   }
 
+  /* Only the first paint after a load is staggered. Re-rendering on a filter
+     keystroke or a language switch should feel instant, not choreographed. */
+  let animateRows = false;
+
   function renderInbounds() {
     const tbody = $('inboundsTableBody');
     const rows = visibleInbounds();
@@ -416,7 +426,8 @@
         : PEYK.t('inb_no_expire');
 
       const tr = document.createElement('tr');
-      tr.className = selected.has(ib.uid) ? 'is-selected' : '';
+      tr.className = (selected.has(ib.uid) ? 'is-selected ' : '')
+        + (animateRows ? 'row-enter' : '');
       tr.innerHTML = `
         <td class="col-check" data-label=""><input type="checkbox" class="checkbox row-check" data-uid="${esc(ib.uid)}" ${selected.has(ib.uid) ? 'checked' : ''} aria-label="select"></td>
         <td data-label="${esc(PEYK.t('inb_name'))}"><b>${esc(ib.name)}</b>${sharingBadge(ib)}${ib.note ? `<div class="small muted">${esc(ib.note)}</div>` : ''}</td>
@@ -430,13 +441,19 @@
         <td data-label="${esc(PEYK.t('inb_actions'))}">
           <div class="row-actions">
             <button class="icon-btn btn-sm" data-action="links" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_links'))}"><svg><use href="#icon-qr"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="history" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('traffic_history'))}"><svg><use href="#icon-chart"/></svg></button>
-            ${sharingThreshold ? `<button class="icon-btn btn-sm" data-action="networks" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('shr_modal_title'))}"><svg><use href="#icon-globe"/></svg></button>` : ''}
             <button class="icon-btn btn-sm" data-action="edit" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('edit'))}"><svg><use href="#icon-edit"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="renew" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_renew'))}"><svg><use href="#icon-clock"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="reset" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_reset_usage'))}"><svg><use href="#icon-refresh"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="regen" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('inb_regenerate'))}"><svg><use href="#icon-key"/></svg></button>
-            <button class="icon-btn btn-sm" data-action="delete" data-uid="${esc(ib.uid)}" title="${esc(PEYK.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>
+            <span class="row-menu">
+              <button class="icon-btn btn-sm" data-menu-toggle title="${esc(PEYK.t('more'))}" aria-label="${esc(PEYK.t('more'))}" aria-haspopup="true" aria-expanded="false"><svg><use href="#icon-dots"/></svg></button>
+              <span class="row-menu-pop" role="menu">
+                <button role="menuitem" data-action="renew" data-uid="${esc(ib.uid)}"><svg><use href="#icon-clock"/></svg>${esc(PEYK.t('inb_renew'))}</button>
+                <button role="menuitem" data-action="history" data-uid="${esc(ib.uid)}"><svg><use href="#icon-chart"/></svg>${esc(PEYK.t('traffic_history'))}</button>
+                ${sharingThreshold ? `<button role="menuitem" data-action="networks" data-uid="${esc(ib.uid)}"><svg><use href="#icon-globe"/></svg>${esc(PEYK.t('shr_modal_title'))}</button>` : ''}
+                <button role="menuitem" data-action="reset" data-uid="${esc(ib.uid)}"><svg><use href="#icon-refresh"/></svg>${esc(PEYK.t('inb_reset_usage'))}</button>
+                <button role="menuitem" data-action="regen" data-uid="${esc(ib.uid)}"><svg><use href="#icon-key"/></svg>${esc(PEYK.t('inb_regenerate'))}</button>
+                <hr>
+                <button role="menuitem" class="danger" data-action="delete" data-uid="${esc(ib.uid)}"><svg><use href="#icon-trash"/></svg>${esc(PEYK.t('delete'))}</button>
+              </span>
+            </span>
           </div>
         </td>`;
       frag.appendChild(tr);
@@ -445,10 +462,41 @@
     syncSelectionUI();
   }
 
+  /* One menu open at a time, dismissed by choosing something, clicking away,
+     or Escape — all three, because any one alone leaves it stuck open. */
+  function closeRowMenus() {
+    document.querySelectorAll('.row-menu.open').forEach(m => {
+      m.classList.remove('open');
+      const t = m.querySelector('[data-menu-toggle]');
+      if (t) t.setAttribute('aria-expanded', 'false');
+    });
+  }
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.row-menu')) closeRowMenus();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeRowMenus();
+  });
+
   // Delegated: one listener regardless of row count.
   $('inboundsTableBody').addEventListener('click', (e) => {
+    const toggle = e.target.closest('[data-menu-toggle]');
+    if (toggle) {
+      const menu = toggle.closest('.row-menu');
+      const wasOpen = menu.classList.contains('open');
+      closeRowMenus();
+      if (!wasOpen) {
+        // Flip upward when there is no room below, so the last rows of a long
+        // table are still usable.
+        const room = window.innerHeight - toggle.getBoundingClientRect().bottom;
+        menu.classList.toggle('flip-up', room < 250);
+        menu.classList.add('open');
+        toggle.setAttribute('aria-expanded', 'true');
+      }
+      return;
+    }
     const btn = e.target.closest('button[data-action]');
-    if (btn) { handleAction(btn.dataset.action, btn.dataset.uid); return; }
+    if (btn) { closeRowMenus(); handleAction(btn.dataset.action, btn.dataset.uid); return; }
   });
   $('inboundsTableBody').addEventListener('change', (e) => {
     const box = e.target.closest('.row-check');
