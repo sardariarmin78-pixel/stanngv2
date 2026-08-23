@@ -142,6 +142,7 @@ HELP = (
     "/start — شروع\n"
     "/bind &lt;کد&gt; — اتصال اشتراک شما به این چت\n"
     "/redeem &lt;کد-شارژ&gt; — فعال‌سازی اشتراک با کد خرید\n"
+    "/trial — دریافت اکانت تست رایگان\n"
     "/status — حجم و اعتبار باقی‌مانده\n"
     "/config — لینک اشتراک و کانفیگ\n"
     "/renew — درخواست تمدید از فروشنده\n"
@@ -159,6 +160,15 @@ VOUCHER_ERRORS = {
     "panel-full": "❌ ظرفیت سرویس پر است. کمی بعد دوباره تلاش کنید.",
     "disabled": "فعال‌سازی با کد در این ربات فعال نیست.",
 }
+
+# Reasons claim_trial can refuse, as sentences a customer can act on.
+TRIAL_ERRORS = {
+    "disabled": "اکانت تست خودکار فعال نیست. با پشتیبانی تماس بگیرید.",
+    "already-claimed": "شما قبلاً اکانت تست خود را گرفته‌اید. برای خرید اشتراک با پشتیبانی در تماس باشید.",
+    "already-subscribed": "شما الان یک اشتراک فعال دارید. وضعیت آن را با /status ببینید.",
+    "panel-full": "ظرفیت سرویس پر است. کمی بعد دوباره تلاش کنید.",
+}
+
 
 def render_status(ib: dict, status: dict, panel: str) -> str:
     quota = status.get("quota_bytes") or 0
@@ -266,6 +276,38 @@ def prune_requests(requests: dict, now: Optional[float] = None) -> bool:
     return removed
 
 
+# ------------------------------------------------------------------ customer nudges
+def _renew_tail(can_renew: bool) -> str:
+    if can_renew:
+        return "\n\nبرای تمدید دستور /renew را بزنید."
+    return "\n\nبرای تمدید با پشتیبانی در تماس باشید."
+
+
+def format_customer_quota(panel: str, name: str, used: int, quota: int,
+                          percent: float, can_renew: bool) -> str:
+    """Addressed to the customer, not about them.
+
+    The owner's copy of this alert is a status report. This one has to read
+    like a helpful heads-up, or it comes across as nagging someone who paid.
+    """
+    return (
+        f"⚠️ <b>{_escape(panel)}</b>\n\n"
+        f"سلام! {percent:.0f}٪ از حجم اشتراک <b>{_escape(name)}</b> مصرف شده.\n"
+        f"مصرف: <code>{_bytes(used)}</code> از <code>{_bytes(quota)}</code>"
+        + _renew_tail(can_renew)
+    )
+
+
+def format_customer_expiry(panel: str, name: str, days_left: int,
+                           can_renew: bool) -> str:
+    when = "امروز" if days_left <= 0 else f"<b>{days_left}</b> روز دیگر"
+    return (
+        f"⏳ <b>{_escape(panel)}</b>\n\n"
+        f"اشتراک <b>{_escape(name)}</b> شما {when} تمام می‌شود."
+        + _renew_tail(can_renew)
+    )
+
+
 # ------------------------------------------------------------------ dispatch
 def parse_command(text: str) -> tuple:
     """Split '/cmd@BotName arg' into (cmd, arg). Not a command -> ('', text)."""
@@ -323,6 +365,16 @@ async def handle_message(message: dict, ctx) -> Optional[str]:
             return VOUCHER_ERRORS.get(outcome["error"], "❌ انجام نشد.")
         return ("🎉 اشتراک شما فعال شد!\n\n"
                 + render_config(outcome["sub_url"], outcome["configs"], ctx.panel_name))
+
+    if cmd == "trial":
+        if not getattr(ctx, "trial_enabled", False):
+            return TRIAL_ERRORS["disabled"]
+        outcome = await ctx.claim_trial(chat)
+        if outcome.get("error"):
+            return TRIAL_ERRORS.get(outcome["error"], "❌ انجام نشد.")
+        return ("🎁 اکانت تست شما ساخته شد!\n\n"
+                + render_config(outcome["sub_url"], outcome["configs"], ctx.panel_name)
+                + "\n\nوضعیت مصرف را هر وقت خواستید با /status ببینید.")
 
     if cmd == "renew":
         uid = ctx.bound_uid(chat)

@@ -75,6 +75,8 @@
     check('settingNotifyExpiry', s.notify_expiry_enabled !== false);
     check('settingRenewEnabled', !!s.userbot_renew_enabled);
     check('settingVoucherRedeem', !!s.voucher_redeem_enabled);
+    check('settingNotifyCustomer', !!s.notify_customer_enabled);
+    check('settingTrialSelfserve', !!s.trial_selfserve_enabled);
     set('settingRenewOptions', (s.userbot_renew_options || [30, 60, 90]).join(','));
     check('settingAutoBackup', !!s.auto_backup_enabled);
     check('settingCleanup', !!s.cleanup_enabled);
@@ -2003,6 +2005,8 @@
     saveSettings('saveRenewBtn', {
       userbot_renew_enabled: $('settingRenewEnabled').checked,
       voucher_redeem_enabled: $('settingVoucherRedeem').checked,
+      notify_customer_enabled: $('settingNotifyCustomer').checked,
+      trial_selfserve_enabled: $('settingTrialSelfserve').checked,
       userbot_renew_options: days,
     }, () => loadRenewRequests(false));
   });
