@@ -923,6 +923,27 @@
           </div>
 
           <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-users"/></svg><span data-i18n="im_title">ورود کاربران از پنل دیگر</span></h3></div>
+            <div class="win-body flex-col gap-12">
+              <div class="small muted" data-i18n="im_hint">فایل خروجی Marzban یا 3x-ui (یا پشتیبان پیک) را بده. اول نشان می‌دهد چه چیزی وارد می‌شود، بعد از تأیید تو انجام می‌دهد.</div>
+              <button class="btn btn-sm" id="importPickBtn"><svg><use href="#icon-download"/></svg><span data-i18n="im_pick">انتخاب فایل</span></button>
+              <input type="file" id="importFile" accept=".json,application/json" style="display:none;">
+              <div id="importPreview" style="display:none;">
+                <hr>
+                <div class="small mb-8"><span data-i18n="im_detected">فرمت شناسایی‌شده</span>: <b class="mono" id="importSource">-</b></div>
+                <div class="small mb-8"><span data-i18n="im_will_import">وارد می‌شود</span>: <b class="mono" id="importCount">0</b> <span data-i18n="im_users">کاربر</span></div>
+                <div class="small muted mb-8" id="importSkipped" style="display:none;"></div>
+                <div class="small muted mb-8" id="importLapsed" style="display:none;"></div>
+                <div class="small mb-8" id="importOverQuota" style="display:none; color:var(--err);"></div>
+                <div class="table-wrap" style="max-height:170px; overflow:auto;">
+                  <table><tbody id="importSampleBody"></tbody></table>
+                </div>
+                <button class="btn btn-primary btn-sm w-full mt-8" id="importConfirmBtn"><span data-i18n="im_confirm">وارد کن</span></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6 win">
             <div class="win-head"><h3><svg><use href="#icon-download"/></svg><span data-i18n="settings_backup_title">پشتیبان‌گیری</span></h3></div>
             <div class="win-body flex-col gap-12">
               <div class="small muted" data-i18n="settings_backup_hint">فایل پشتیبان شامل کاربران، تنظیمات و هش رمز ادمین است. آن را جای امنی نگه دارید.</div>

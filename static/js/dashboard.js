@@ -731,6 +731,92 @@
   });
 
 
+  // ---------------- import from another panel ----------------
+  /* Two steps on purpose. A migration is the one action an admin cannot undo
+     by hand -- nobody unpicks a thousand wrong rows -- so nothing is written
+     until they have seen what the file actually contains. */
+  let importPayload = null;
+
+  $('importPickBtn').addEventListener('click', () => $('importFile').click());
+
+  $('importFile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    $('importPreview').style.display = 'none';
+    importPayload = null;
+    if (!file) return;
+
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch (err) {
+      PEYK.toast(PEYK.t('rs_err_invalid-json'), 'error');
+      return;
+    }
+
+    const btn = $('importPickBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/import/preview', { method: 'POST', body: { data: parsed } });
+      importPayload = parsed;
+      renderImportPreview(r);
+    } catch (err) {
+      PEYK.toast(apiErrorText(err.detail), 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+  function renderImportPreview(r) {
+    $('importSource').textContent = r.source;
+    $('importCount').textContent = r.importable;
+
+    const skipped = $('importSkipped');
+    skipped.style.display = r.skipped.length ? '' : 'none';
+    skipped.textContent = PEYK.t('im_skipped').replace('{n}', r.skipped.length);
+
+    const lapsed = $('importLapsed');
+    lapsed.style.display = r.lapsed ? '' : 'none';
+    lapsed.textContent = PEYK.t('im_lapsed').replace('{n}', r.lapsed);
+
+    const over = $('importOverQuota');
+    over.style.display = r.over_quota ? '' : 'none';
+    over.textContent = PEYK.t('im_over_quota').replace('{n}', r.over_quota);
+
+    const tbody = $('importSampleBody');
+    tbody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    r.sample.forEach(row => {
+      const tr = document.createElement('tr');
+      const state = row.lapsed
+        ? `<span class="pill pill-muted">${esc(PEYK.t(row.lapsed === 'quota' ? 'status_quota_over' : 'expired'))}</span>`
+        : `<span class="pill pill-on"><span class="pill-dot"></span>${esc(PEYK.t('active'))}</span>`;
+      tr.innerHTML = `
+        <td><b>${esc(row.name)}</b></td>
+        <td class="mono small">${row.quota_gb ? esc(row.quota_gb) + ' GB' : esc(PEYK.t('unlimited'))}</td>
+        <td style="text-align:end;">${state}</td>`;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    $('importPreview').style.display = '';
+    $('importConfirmBtn').disabled = !r.importable || !!r.over_quota;
+  }
+
+  $('importConfirmBtn').addEventListener('click', async () => {
+    if (!importPayload) return;
+    if (!confirm(PEYK.t('im_confirm_ask').replace('{n}', $('importCount').textContent))) return;
+    const btn = $('importConfirmBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/import', { method: 'POST', body: { data: importPayload } });
+      PEYK.toast(PEYK.t('im_done').replace('{n}', r.imported), 'success', 5000);
+      $('importPreview').style.display = 'none';
+      importPayload = null;
+      loadInbounds();
+    } catch (e) {
+      PEYK.toast(apiErrorText(e.detail), 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+
   // ---------------- sales + vouchers ----------------
   /* Grouped thousands, no decimals: these are Toman figures, and a fractional
      Toman is not a thing anyone writes. */
