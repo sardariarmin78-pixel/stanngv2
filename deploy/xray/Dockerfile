@@ -20,11 +20,11 @@ RUN curl -fsSL -o /tmp/xray.zip \
  && rm /tmp/xray.zip
 
 COPY . /app
-COPY nginx.conf /etc/nginx/nginx.conf
-RUN chmod +x /app/entrypoint.sh
+COPY deploy/xray/nginx.conf /etc/nginx/nginx.conf
+RUN chmod +x /app/deploy/xray/entrypoint.sh
 
 # The panel binds this; nginx owns whatever public port the platform assigns.
 ENV PANEL_PORT=10000
 EXPOSE 8000
 
-CMD ["/app/entrypoint.sh"]
+CMD ["/app/deploy/xray/entrypoint.sh"]
