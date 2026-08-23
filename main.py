@@ -52,7 +52,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.0"
 
 
 def _env_raw(name: str):
@@ -923,10 +923,15 @@ async def _backup_loop():
 
 
 class _BotContext:
-    """Everything the bot is allowed to touch — deliberately read-only.
+    """Everything the bot is allowed to touch.
 
-    The bot can show a config and a usage figure. It can never create, extend,
-    disable or delete anything, so a leaked bot token is not a leaked panel.
+    Almost read-only: the bot can show a config and a usage figure, and can
+    never extend, disable or delete anything, so a leaked bot token is not a
+    leaked panel.
+
+    Redeeming a voucher is the one write, and it is gated twice over — the
+    seller has to switch it on, and the caller has to already hold a valid
+    unused code. A token on its own still creates nothing.
     """
 
     def __init__(self, db, request_origin: str):
@@ -937,6 +942,7 @@ class _BotContext:
         self._pending_requests = {}
         settings = db.get("settings") or {}
         self.renew_enabled = bool(settings.get("userbot_renew_enabled"))
+        self.voucher_enabled = bool(settings.get("voucher_redeem_enabled"))
 
     def lookup(self, uid: str):
         ib = inbound_by_uid(self.db, uid)
@@ -956,6 +962,21 @@ class _BotContext:
             return "", []
         configs = build_configs_for_origin(self.db, ib, self.origin)
         return f"{self.origin}/sub/{sub_token_of(ib)}", configs
+
+    async def redeem(self, chat, code: str) -> dict:
+        """Create the account a code paid for, and bind it to this chat."""
+        try:
+            ib = await redeem_voucher(code, chat_id=chat)
+        except VoucherError as e:
+            return {"error": e.reason}
+        # Bound immediately so /status and /config work without a second step.
+        self._pending_binds[str(chat)] = ib["uid"]
+        configs = build_configs_for_origin(self.db, ib, self.origin)
+        return {
+            "inbound": ib,
+            "sub_url": f"{self.origin}/sub/{sub_token_of(ib)}",
+            "configs": configs,
+        }
 
     def has_open_request(self, chat) -> bool:
         """One open ask per chat, so tapping /renew repeatedly cannot spam."""
@@ -1841,14 +1862,14 @@ BOOL_SETTINGS = {
     "notify_quota_enabled", "notify_expiry_enabled", "notify_daily_report",
     "auto_backup_enabled", "userbot_enabled", "cleanup_enabled", "trial_enabled",
     "userbot_renew_enabled", "health_check_enabled", "health_auto_disable",
-    "sharing_detect_enabled", "sharing_auto_disable",
+    "sharing_detect_enabled", "sharing_auto_disable", "voucher_redeem_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
     "fragment_packets": 32, "fragment_length": 32, "fragment_interval": 32,
     "panel_name": 40, "telegram_contact": 200,
     "telegram_bot_token": 100, "telegram_chat_id": 40,
-    "userbot_token": 100, "trial_prefix": 40,
+    "userbot_token": 100, "trial_prefix": 40, "currency": 12,
 }
 # Numeric settings: name -> (min, max)
 INT_SETTINGS = {
@@ -2258,8 +2279,13 @@ async def api_create_inbound(request: Request, user: Identity = Depends(require_
     }
     ib.update(fields)
 
+    plan = _plan_by_id(db, payload.get("plan_id"))
+    if plan:
+        ib["plan_id"] = plan["id"]
+
     def _apply(db):
         db["inbounds"].append(ib)
+        _record_sale(db, ib, plan, None if user.is_owner else user.id, "panel")
 
     await store.mutate(_apply)
     return {"ok": True, "inbound": serialize_inbound(ib)}
@@ -2638,6 +2664,288 @@ async def _run_sharing_check() -> list:
     return transitions
 
 
+# ------------------------------------------------------------------ sales
+MAX_SALES = 20_000
+
+
+def _record_sale(db, ib: dict, plan: Optional[dict], seller: Optional[str],
+                 source: str = "panel"):
+    """Append one line to the ledger.
+
+    The price and plan name are copied in, not referenced: renaming a plan or
+    changing its price must not rewrite what was already sold.
+    """
+    price = int((plan or {}).get("price") or 0)
+    if price <= 0:
+        return
+    sales = db.setdefault("sales", [])
+    sales.append({
+        "id": gen_uid(),
+        "at": time.time(),
+        "uid": ib.get("uid"),
+        "name": ib.get("name"),
+        "plan_id": (plan or {}).get("id"),
+        "plan_name": (plan or {}).get("name"),
+        "price": price,
+        "seller": seller,          # reseller id, or None for the owner
+        "source": source,          # "panel" | "bulk" | "voucher"
+    })
+    if len(sales) > MAX_SALES:
+        del sales[:-MAX_SALES]
+
+
+def _plan_by_id(db, plan_id) -> Optional[dict]:
+    if not plan_id:
+        return None
+    return next((pl for pl in db.get("plans", []) if pl.get("id") == plan_id), None)
+
+
+def visible_sales(db, identity) -> list:
+    if identity.is_owner:
+        return list(db.get("sales", []))
+    return [s for s in db.get("sales", []) if s.get("seller") == identity.id]
+
+
+@app.get("/api/sales")
+async def api_sales(request: Request, user: Identity = Depends(require_auth)):
+    """Revenue for a period, split by seller and by plan.
+
+    A reseller sees only its own lines, so the same endpoint serves both roles.
+    """
+    try:
+        days = max(1, min(365, int(request.query_params.get("days", 30))))
+    except (TypeError, ValueError):
+        days = 30
+    db = await store.get()
+    since = time.time() - days * 86400
+    rows = [s for s in visible_sales(db, user) if s.get("at", 0) >= since]
+
+    by_seller, by_plan = {}, {}
+    names = {r["id"]: r.get("username") for r in db.get("resellers", [])}
+    for s in rows:
+        seller = s.get("seller")
+        key = names.get(seller, "?") if seller else None
+        bucket = by_seller.setdefault(key, {"seller": key, "count": 0, "total": 0})
+        bucket["count"] += 1
+        bucket["total"] += s.get("price", 0)
+
+        pname = s.get("plan_name") or "-"
+        pb = by_plan.setdefault(pname, {"plan": pname, "count": 0, "total": 0})
+        pb["count"] += 1
+        pb["total"] += s.get("price", 0)
+
+    return {
+        "days": days,
+        "count": len(rows),
+        "total": sum(s.get("price", 0) for s in rows),
+        "currency": (db.get("settings") or {}).get("currency", "تومان"),
+        "by_seller": sorted(by_seller.values(), key=lambda b: -b["total"]),
+        "by_plan": sorted(by_plan.values(), key=lambda b: -b["total"]),
+        "recent": sorted(rows, key=lambda s: -s.get("at", 0))[:50],
+    }
+
+
+# ------------------------------------------------------------------ vouchers
+MAX_VOUCHERS = 5_000
+VOUCHER_BATCH_MAX = 200
+# No I, O, 0 or 1: these are read off a screen and typed by hand, and those
+# four are the pairs people get wrong.
+VOUCHER_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def gen_voucher_code() -> str:
+    body = "".join(secrets.choice(VOUCHER_ALPHABET) for _ in range(12))
+    return f"{body[:4]}-{body[4:8]}-{body[8:]}"
+
+
+def normalize_code(raw: str) -> str:
+    """Accept what a customer actually types: spaces, no dashes, lower case."""
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", raw or "").upper()
+    if len(cleaned) != 12:
+        return ""
+    return f"{cleaned[:4]}-{cleaned[4:8]}-{cleaned[8:]}"
+
+
+def voucher_by_code(db, code: str) -> Optional[dict]:
+    if not code:
+        return None
+    return next((v for v in db.get("vouchers", []) if v.get("code") == code), None)
+
+
+def visible_vouchers(db, identity) -> list:
+    if identity.is_owner:
+        return list(db.get("vouchers", []))
+    return [v for v in db.get("vouchers", []) if v.get("owner") == identity.id]
+
+
+def serialize_voucher(v: dict) -> dict:
+    return {k: v.get(k) for k in
+            ("code", "plan_id", "plan_name", "price", "owner", "created_at",
+             "used_at", "used_uid", "used_name", "note", "batch")}
+
+
+def _unused_voucher_count(db, identity) -> int:
+    return sum(1 for v in visible_vouchers(db, identity) if not v.get("used_at"))
+
+
+@app.get("/api/vouchers")
+async def api_list_vouchers(user: Identity = Depends(require_auth)):
+    db = await store.get()
+    rows = sorted(visible_vouchers(db, user), key=lambda v: -(v.get("created_at") or 0))
+    return {"vouchers": [serialize_voucher(v) for v in rows[:500]]}
+
+
+@app.post("/api/vouchers")
+async def api_create_vouchers(request: Request, user: Identity = Depends(require_auth)):
+    """Mint a batch against one plan."""
+    payload = await _json_body(request)
+    count = _as_number(payload.get("count") or 1, "count", 1, VOUCHER_BATCH_MAX, True)
+    note = str(payload.get("note") or "").strip()[:200]
+
+    db = await store.get()
+    plan = _plan_by_id(db, payload.get("plan_id"))
+    if not plan:
+        raise HTTPException(404, "plan-not-found")
+    if len(db.get("vouchers", [])) + count > MAX_VOUCHERS:
+        raise HTTPException(400, "voucher-limit-reached")
+
+    # An unused voucher is a promise to create a user, so it is charged against
+    # the reseller's quota now. Otherwise they could mint a hundred codes on a
+    # five-user quota and have ninety-five customers fail at redemption.
+    if not user.is_owner:
+        assert_can_create(db, user, count + _unused_voucher_count(db, user))
+
+    batch = gen_uid()[:8]
+    now = time.time()
+    minted = []
+
+    def _apply(db):
+        existing = {v.get("code") for v in db.get("vouchers", [])}
+        for _ in range(count):
+            code = gen_voucher_code()
+            while code in existing:
+                code = gen_voucher_code()
+            existing.add(code)
+            row = {
+                "code": code,
+                "plan_id": plan["id"],
+                "plan_name": plan.get("name"),
+                "price": int(plan.get("price") or 0),
+                "owner": None if user.is_owner else user.id,
+                "created_at": now,
+                "used_at": None,
+                "note": note,
+                "batch": batch,
+            }
+            db.setdefault("vouchers", []).append(row)
+            minted.append(row)
+
+    await store.mutate(_apply)
+    return {"ok": True, "batch": batch,
+            "vouchers": [serialize_voucher(v) for v in minted]}
+
+
+@app.delete("/api/vouchers/{code}")
+async def api_delete_voucher(code: str, user: Identity = Depends(require_auth)):
+    """Only an unredeemed code can be revoked; a used one is a sales record."""
+    code = normalize_code(code)
+    removed = {"v": False}
+
+    def _apply(db):
+        target = voucher_by_code(db, code)
+        if not target or not (user.is_owner or target.get("owner") == user.id):
+            raise HTTPException(404, "not-found")
+        if target.get("used_at"):
+            raise HTTPException(400, "voucher-already-used")
+        db["vouchers"] = [v for v in db["vouchers"] if v.get("code") != code]
+        removed["v"] = True
+
+    await store.mutate(_apply)
+    return {"ok": True}
+
+
+class VoucherError(Exception):
+    """Carries a code the bot can turn into a sentence."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+async def redeem_voucher(raw_code: str, chat_id=None) -> dict:
+    """Turn a code into a live subscription.
+
+    The check and the write happen inside one mutation: two people redeeming
+    the same code at the same moment must produce exactly one account.
+    """
+    code = normalize_code(raw_code)
+    if not code:
+        raise VoucherError("invalid-code")
+
+    result = {}
+
+    def _apply(db):
+        v = voucher_by_code(db, code)
+        if not v:
+            raise VoucherError("invalid-code")
+        if v.get("used_at"):
+            raise VoucherError("already-used")
+        plan = _plan_by_id(db, v.get("plan_id"))
+        if not plan:
+            raise VoucherError("plan-gone")
+        if len(db["inbounds"]) >= MAX_INBOUNDS:
+            raise VoucherError("panel-full")
+
+        settings = db.get("settings") or {}
+        now = time.time()
+        days = int(plan.get("days") or 0)
+        ib = {
+            "uid": gen_uid(),
+            "uuid": gen_uuid(),
+            "sub_token": gen_uid(),
+            "ip_log": {},
+            "plan_id": plan["id"],
+            "owner": v.get("owner"),
+            "name": f"{plan.get('name', 'plan')}-{code[:4]}"[:64],
+            "enabled": True,
+            "created_at": now,
+            "expire_at": (now + days * 86400) if days > 0 else None,
+            "expire_days": days,
+            "quota_gb": plan.get("quota_gb", 0),
+            "max_connections": plan.get("max_connections", 0),
+            "max_requests": plan.get("max_requests", 0),
+            "used_up": 0,
+            "used_down": 0,
+            "request_count": 0,
+            "strict_single_ip": False,
+            "note": f"voucher {code}",
+            "fp": settings.get("default_fingerprint", "chrome"),
+            "history": [],
+        }
+        db["inbounds"].append(ib)
+
+        v["used_at"] = now
+        v["used_uid"] = ib["uid"]
+        v["used_name"] = ib["name"]
+        if chat_id is not None:
+            v["used_chat"] = chat_id
+        _record_sale(db, ib, plan, v.get("owner"), "voucher")
+        result.update(ib)
+
+    await store.mutate(_apply)
+    return result
+
+
+@app.post("/api/vouchers/{code}/redeem")
+async def api_redeem_voucher(code: str, user: Identity = Depends(require_auth)):
+    """Redeem from the panel, for a seller doing it on a customer's behalf."""
+    try:
+        ib = await redeem_voucher(code)
+    except VoucherError as e:
+        raise HTTPException(400, e.reason)
+    return {"ok": True, "inbound": serialize_inbound(ib)}
+
+
 # ------------------------------------------------------------------ resellers
 MAX_RESELLERS = 100
 
@@ -2789,6 +3097,9 @@ def sanitize_plan(payload: dict) -> dict:
         "quota_gb": _as_number(payload.get("quota_gb"), "quota_gb", 0, 1_000_000, False),
         "max_connections": _as_number(payload.get("max_connections"), "max_connections", 0, 10_000, True),
         "max_requests": _as_number(payload.get("max_requests"), "max_requests", 0, 100_000_000, True),
+        # Whole currency units (Toman by default). Zero means "not for sale",
+        # which is how a plan opts out of the revenue report.
+        "price": _as_number(payload.get("price"), "price", 0, 1_000_000_000, True),
     }
 
 
@@ -2864,10 +3175,12 @@ async def api_bulk_create(request: Request, user: Identity = Depends(require_aut
 
     db = await store.get()
     plan_id = payload.get("plan_id")
+    plan_row = None
     if plan_id:
-        plan = next((pl for pl in db.get("plans", []) if pl.get("id") == plan_id), None)
+        plan = _plan_by_id(db, plan_id)
         if not plan:
             raise HTTPException(404, "plan-not-found")
+        plan_row = plan
         base = {
             "quota_gb": plan.get("quota_gb", 0),
             "expire_days": plan.get("days", 0),
@@ -2900,6 +3213,7 @@ async def api_bulk_create(request: Request, user: Identity = Depends(require_aut
             "uuid": gen_uuid(),
             "sub_token": gen_uid(),
             "ip_log": {},
+            "plan_id": plan_id or None,
             "owner": None if user.is_owner else user.id,
             "name": f"{prefix}-{str(start + i).zfill(width)}"[:64],
             "enabled": True,
@@ -2918,6 +3232,8 @@ async def api_bulk_create(request: Request, user: Identity = Depends(require_aut
 
     def _apply(db):
         db["inbounds"].extend(created)
+        for row in created:
+            _record_sale(db, row, plan_row, None if user.is_owner else user.id, "bulk")
 
     await store.mutate(_apply)
     return {"ok": True, "created": len(created),

@@ -141,6 +141,7 @@ HELP = (
     "<b>راهنما</b>\n\n"
     "/start — شروع\n"
     "/bind &lt;کد&gt; — اتصال اشتراک شما به این چت\n"
+    "/redeem &lt;کد-شارژ&gt; — فعال‌سازی اشتراک با کد خرید\n"
     "/status — حجم و اعتبار باقی‌مانده\n"
     "/config — لینک اشتراک و کانفیگ\n"
     "/renew — درخواست تمدید از فروشنده\n"
@@ -148,6 +149,16 @@ HELP = (
     "کد اشتراک را از فروشنده بگیرید."
 )
 
+
+
+# Reasons redeem_voucher can refuse, as sentences a customer can act on.
+VOUCHER_ERRORS = {
+    "invalid-code": "❌ این کد معتبر نیست. دوباره از روی رسید بخوانید یا از فروشنده بپرسید.",
+    "already-used": "❌ این کد قبلاً استفاده شده است.",
+    "plan-gone": "❌ پلن این کد دیگر موجود نیست. با فروشنده تماس بگیرید.",
+    "panel-full": "❌ ظرفیت سرویس پر است. کمی بعد دوباره تلاش کنید.",
+    "disabled": "فعال‌سازی با کد در این ربات فعال نیست.",
+}
 
 def render_status(ib: dict, status: dict, panel: str) -> str:
     quota = status.get("quota_bytes") or 0
@@ -298,6 +309,20 @@ async def handle_message(message: dict, ctx) -> Optional[str]:
         # lookup() returns {"inbound": ..., "status": ...}; the name is inside.
         name = (found.get("inbound") or {}).get("name", "")
         return f"✅ اشتراک <b>{_escape(name)}</b> به این چت وصل شد.\n\n" + HELP
+
+    if cmd == "redeem":
+        if not getattr(ctx, "voucher_enabled", False):
+            return VOUCHER_ERRORS["disabled"]
+        if not arg.strip():
+            return ("کد خرید را بعد از دستور بنویسید:\n"
+                    "<code>/redeem ABCD-EFGH-JKLM</code>")
+        # Rate-limited by the same per-chat budget as every other command, so
+        # a code cannot be brute-forced from here.
+        outcome = await ctx.redeem(chat, arg)
+        if outcome.get("error"):
+            return VOUCHER_ERRORS.get(outcome["error"], "❌ انجام نشد.")
+        return ("🎉 اشتراک شما فعال شد!\n\n"
+                + render_config(outcome["sub_url"], outcome["configs"], ctx.panel_name))
 
     if cmd == "renew":
         uid = ctx.bound_uid(chat)
