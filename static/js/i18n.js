@@ -427,6 +427,12 @@ window.I18N = {
   hl_threshold: { fa: "بعد از چند خطای پیاپی", en: "Consecutive failures before alerting" },
   hl_auto_disable: { fa: "غیرفعال کردن خودکار لوکیشن خراب", en: "Auto-disable a dead location" },
   hl_auto_disable_hint: { fa: "لوکیشنی که جواب نمی‌دهد از لینک اشتراک کاربران حذف می‌شود.", en: "A location that stops responding is dropped from users' subscriptions." },
+  // ---- v3.6.0: in-bot shop ----
+  shop_enable: { fa: "فروشگاه در ربات (/buy)", en: "In-bot shop (/buy)" },
+  shop_enable_hint: { fa: "مشتری پلن را انتخاب می‌کند، اطلاعات پرداخت می‌گیرد و عکس رسید می‌فرستد. رسید با دکمه‌ی تأیید برای شما می‌آید و با یک تپ اکانت ساخته و تحویل می‌شود.", en: "The customer picks a plan, gets your payment details and sends a receipt photo. It reaches you with an approve button, and one tap creates and delivers the account." },
+  shop_instructions: { fa: "اطلاعات پرداخت", en: "Payment details" },
+  shop_instructions_ph: { fa: "مثلاً: کارت ۶۰۳۷-۹۹۱۱-۱۲۳۴-۵۶۷۸ به نام آرمین سرداری", en: "e.g. card 6037-9911-1234-5678, account name ..." },
+  shop_instructions_hint: { fa: "همین متن عیناً به مشتری نشان داده می‌شود. شماره کارت یا هر روش پرداختی که استفاده می‌کنی را اینجا بنویس.", en: "Shown to the customer exactly as written. Put your card number, or whatever payment method you use, here." },
   // ---- v3.5.0: customer comms ----
   trial_selfserve: { fa: "مشتری خودش بتواند تست بگیرد", en: "Let customers claim their own trial" },
   trial_selfserve_hint: { fa: "با دستور /trial در ربات، بدون اینکه به شما پیام بدهد. هر اکانت تلگرام فقط یک بار — و کسی که اشتراک فعال دارد نمی‌تواند.", en: "With /trial in the bot, without messaging you. One per Telegram account, and never for someone who already has a live subscription." },
