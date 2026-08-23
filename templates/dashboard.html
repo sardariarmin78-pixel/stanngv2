@@ -669,6 +669,18 @@
               <div class="small muted mb-16" data-i18n="rn_hint">کاربر در ربات دستور /renew می‌زند، برای شما پیامی با دکمه‌های تأیید می‌آید و با یک تپ تمدید انجام می‌شود. حجم مصرفی هم از نو شروع می‌شود.</div>
               <div class="setting-row">
                 <div>
+                  <div class="title" data-i18n="shop_enable">فروشگاه در ربات (/buy)</div>
+                  <div class="hint" data-i18n="shop_enable_hint">مشتری پلن را انتخاب می‌کند، اطلاعات پرداخت می‌گیرد و عکس رسید می‌فرستد. رسید با دکمه‌ی تأیید برای شما می‌آید و با یک تپ اکانت ساخته و تحویل می‌شود.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingShopEnabled"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label data-i18n="shop_instructions">اطلاعات پرداخت</label>
+                <textarea class="input" id="settingShopInstructions" rows="3" maxlength="600" data-i18n-placeholder="shop_instructions_ph" placeholder="مثلاً: کارت ۶۰۳۷-۹۹۱۱-۱۲۳۴-۵۶۷۸ به نام آرمین سرداری"></textarea>
+                <div class="small muted mt-8" data-i18n="shop_instructions_hint">همین متن عیناً به مشتری نشان داده می‌شود. شماره کارت یا هر روش پرداختی که استفاده می‌کنی را اینجا بنویس.</div>
+              </div>
+              <div class="setting-row">
+                <div>
                   <div class="title" data-i18n="nt_customer">یادآوری به خودِ مشتری</div>
                   <div class="hint" data-i18n="nt_customer_hint">همان هشدار حجم و انقضا، این بار به چت خود مشتری در ربات کاربران. فقط برای کسانی که خودشان اشتراکشان را به ربات وصل کرده‌اند.</div>
                 </div>

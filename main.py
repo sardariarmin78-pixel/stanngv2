@@ -53,7 +53,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.5.0"
+APP_VERSION = "3.6.0"
 
 
 def _env_raw(name: str):
@@ -1031,9 +1031,12 @@ class _BotContext:
         self.panel_name = brand(db)["panel_name"]
         self._pending_binds = {}
         self._pending_requests = {}
+        self._pending_orders = {}
+        self._pending_selection = {}
         settings = db.get("settings") or {}
         self.renew_enabled = bool(settings.get("userbot_renew_enabled"))
         self.voucher_enabled = bool(settings.get("voucher_redeem_enabled"))
+        self.shop_enabled = bool(settings.get("shop_enabled"))
         self.trial_enabled = bool(settings.get("trial_selfserve_enabled")
                                   and settings.get("trial_enabled", True))
 
@@ -1055,6 +1058,67 @@ class _BotContext:
             return "", []
         configs = build_configs_for_origin(self.db, ib, self.origin)
         return f"{self.origin}/sub/{sub_token_of(ib)}", configs
+
+    # ---------------- shop ----------------
+    def shop_plans(self) -> list:
+        """Only plans with a price are for sale; zero means internal."""
+        currency = (self.db.get("settings") or {}).get("currency") or "تومان"
+        out = []
+        for plan in self.db.get("plans", []):
+            if int(plan.get("price") or 0) <= 0:
+                continue
+            row = dict(plan)
+            row["currency"] = currency
+            out.append(row)
+        return out
+
+    def has_open_order(self, chat) -> bool:
+        chat = str(chat)
+        for order in (self.db.get("orders") or {}).values():
+            if str(order.get("chat")) == chat and order.get("status") == "pending":
+                return True
+        return chat in self._pending_orders
+
+    async def send_shop(self, chat, text: str, keyboard: list):
+        token = ((self.db.get("settings") or {}).get("userbot_token") or "").strip()
+        try:
+            await userbot.send_with_buttons(token, chat, text, keyboard)
+        except userbot.UserBotError:
+            pass
+
+    def select_plan(self, chat, plan_id: str):
+        """Remember what this chat is buying, until the receipt arrives."""
+        self._pending_selection[str(chat)] = plan_id
+
+    def selected_plan(self, chat) -> Optional[str]:
+        chat = str(chat)
+        if chat in self._pending_selection:
+            return self._pending_selection[chat]
+        return (self.db.get("shop_selections") or {}).get(chat)
+
+    async def submit_receipt(self, chat, file_id: str) -> dict:
+        plan_id = self.selected_plan(chat)
+        plan = _plan_by_id(self.db, plan_id) if plan_id else None
+        if not plan:
+            return {"error": "no-order"}
+        if self.has_open_order(chat):
+            return {"error": "pending"}
+        self._pending_orders[str(chat)] = {
+            "chat": chat,
+            "plan_id": plan["id"],
+            "plan_name": plan.get("name"),
+            "price": int(plan.get("price") or 0),
+            "file_id": file_id,
+        }
+        return {"ok": True}
+
+    @property
+    def pending_orders(self):
+        return self._pending_orders
+
+    @property
+    def pending_selection(self):
+        return self._pending_selection
 
     async def claim_trial(self, chat) -> dict:
         """Give this chat its one free trial, config included."""
@@ -1179,6 +1243,7 @@ async def _userbot_loop():
                     replies.append((chat, reply))
 
             new_requests = dict(ctx.pending_requests)
+            new_orders = dict(ctx.pending_orders)
 
             def _apply(db):
                 db["bot_offset"] = highest
@@ -1197,14 +1262,32 @@ async def _userbot_loop():
                         }
                         req["request_id"] = rid
                     userbot.prune_requests(store_reqs)
+                if ctx.pending_selection:
+                    sel = db.setdefault("shop_selections", {})
+                    sel.update(ctx.pending_selection)
+                    _prune_selections(sel)
+                for chat_key, order in new_orders.items():
+                    oid = gen_uid()[:8]
+                    db.setdefault("orders", {})[oid] = {
+                        "chat": order["chat"], "plan_id": order["plan_id"],
+                        "plan_name": order["plan_name"], "price": order["price"],
+                        "file_id": order["file_id"], "created_at": time.time(),
+                        "status": "pending", "admin_message_id": None,
+                    }
+                    order["order_id"] = oid
+                    _prune_orders(db["orders"])
 
             await store.mutate(
-                _apply, persist=bool(ctx.pending_binds or new_requests))
+                _apply,
+                persist=bool(ctx.pending_binds or new_requests or new_orders
+                             or ctx.pending_selection))
 
             for req in new_requests.values():
                 await _dispatch_renew_request(req)
+            for order in new_orders.values():
+                await _dispatch_order(order)
             for callback in callbacks:
-                await _handle_renew_callback(callback)
+                await _handle_bot_callback(callback, ctx)
 
             for chat, text in replies:
                 try:
@@ -1354,6 +1437,244 @@ async def _dispatch_renew_request(req: dict):
             entry["admin_message_id"] = message_id
 
     await store.mutate(_apply, persist=False)
+
+
+MAX_ORDERS = 500
+MAX_SELECTIONS = 2000
+MAX_RECEIPT_BYTES = 6 * 1024 * 1024
+
+
+def _prune_orders(orders: dict):
+    if len(orders) <= MAX_ORDERS:
+        return
+    settled = sorted((k for k, v in orders.items() if v.get("status") != "pending"),
+                     key=lambda k: orders[k].get("created_at", 0))
+    # Pending orders are somebody waiting on an answer; drop settled ones first.
+    for key in settled[: len(orders) - MAX_ORDERS]:
+        orders.pop(key, None)
+
+
+def _prune_selections(sel: dict):
+    if len(sel) > MAX_SELECTIONS:
+        for key in list(sel)[: len(sel) - MAX_SELECTIONS]:
+            sel.pop(key, None)
+
+
+async def _dispatch_order(order: dict):
+    """Put the receipt in front of the seller with approve/reject buttons.
+
+    The image has to be re-uploaded rather than forwarded: a file_id belongs
+    to the bot that received it, and the customer bot and the alert bot are
+    two different bots.
+    """
+    oid = order.get("order_id")
+    if not oid:
+        return
+    db = await store.get()
+    admin_token, admin_chat, _ = _notify_config(db)
+    user_token = ((db.get("settings") or {}).get("userbot_token") or "").strip()
+    if not admin_token or not user_token:
+        return
+
+    caption = userbot.format_order_for_admin(
+        brand(db)["panel_name"], order.get("plan_name", ""),
+        order.get("price"), order.get("chat"))
+    keyboard = userbot.order_keyboard(oid)
+
+    message_id = None
+    try:
+        blob = await userbot.download_file(user_token, order["file_id"], MAX_RECEIPT_BYTES)
+        sent = await userbot.send_photo_bytes(admin_token, admin_chat, blob,
+                                              caption, keyboard)
+        message_id = sent.get("message_id")
+    except userbot.UserBotError:
+        # The receipt did not make it, but the order is real and the customer
+        # is waiting, so tell the seller in text rather than losing it.
+        try:
+            sent = await userbot.send_with_buttons(
+                admin_token, admin_chat,
+                caption + "\n\n⚠️ تصویر رسید منتقل نشد؛ از مشتری دوباره بخواهید.",
+                keyboard)
+            message_id = sent.get("message_id")
+        except userbot.UserBotError:
+            return
+
+    def _apply(db):
+        entry = (db.get("orders") or {}).get(oid)
+        if entry:
+            entry["admin_message_id"] = message_id
+
+    await store.mutate(_apply, persist=False)
+
+
+async def _handle_bot_callback(callback: dict, ctx=None):
+    """Route a button tap to whichever flow owns it."""
+    data = callback.get("data") or ""
+    if data.startswith("buy:"):
+        await _handle_shop_callback(callback, ctx)
+        return
+    if data.startswith("ord:"):
+        await _handle_order_callback(callback)
+        return
+    await _handle_renew_callback(callback)
+
+
+async def _handle_shop_callback(callback: dict, ctx):
+    """A customer picked a plan: reply with payment instructions."""
+    db = await store.get()
+    settings = db.get("settings") or {}
+    token = (settings.get("userbot_token") or "").strip()
+    chat = ((callback.get("message") or {}).get("chat") or {}).get("id")
+    callback_id = callback.get("id")
+
+    async def ack(text=""):
+        try:
+            await userbot.answer_callback(token, callback_id, text)
+        except userbot.UserBotError:
+            pass
+
+    if not settings.get("shop_enabled") or chat is None:
+        await ack()
+        return
+
+    plan_id = (callback.get("data") or "")[4:]
+    plan = _plan_by_id(db, plan_id)
+    if not plan or int(plan.get("price") or 0) <= 0:
+        await ack("این پلن دیگر موجود نیست.")
+        return
+
+    row = dict(plan)
+    row["currency"] = settings.get("currency") or "تومان"
+    instructions = (settings.get("shop_instructions") or "").strip() \
+        or "برای پرداخت با پشتیبانی هماهنگ کنید."
+    text = userbot.format_payment(brand(db)["panel_name"], row, instructions)
+
+    def _apply(db):
+        db.setdefault("shop_selections", {})[str(chat)] = plan["id"]
+        _prune_selections(db["shop_selections"])
+
+    await store.mutate(_apply, persist=False)
+    if ctx is not None:
+        ctx.select_plan(chat, plan["id"])
+    try:
+        await userbot.send(token, chat, text)
+    except userbot.UserBotError:
+        pass
+    await ack()
+
+
+async def _handle_order_callback(callback: dict):
+    """The seller approved or rejected a receipt."""
+    db = await store.get()
+    admin_token, admin_chat, _ = _notify_config(db)
+    user_token = ((db.get("settings") or {}).get("userbot_token") or "").strip()
+    if not admin_token:
+        return
+
+    callback_id = callback.get("id")
+    from_chat = ((callback.get("message") or {}).get("chat") or {}).get("id")
+
+    async def ack(text=""):
+        try:
+            await userbot.answer_callback(admin_token, callback_id, text)
+        except userbot.UserBotError:
+            pass
+
+    # These buttons only ever go to the seller. Verify rather than assume:
+    # otherwise a customer who guessed an order id could approve their own.
+    if str(from_chat) != str(admin_chat):
+        await ack()
+        return
+
+    oid, approved = userbot.parse_order_callback(callback.get("data") or "")
+    if not oid:
+        await ack()
+        return
+
+    entry = (db.get("orders") or {}).get(oid)
+    if not entry or entry.get("status") != "pending":
+        await ack("این سفارش قبلاً بررسی شده است.")
+        return
+
+    panel = brand(db)["panel_name"]
+    customer_chat = entry.get("chat")
+
+    if not approved:
+        def _reject(db):
+            row = (db.get("orders") or {}).get(oid)
+            if row:
+                row["status"] = "rejected"
+            (db.get("shop_selections") or {}).pop(str(customer_chat), None)
+
+        await store.mutate(_reject)
+        admin_text = f"❌ سفارش <b>{userbot._escape(entry.get('plan_name'))}</b> رد شد."
+        user_text = (f"<b>{userbot._escape(panel)}</b>\n\n"
+                     "متأسفانه سفارش شما تأیید نشد. با پشتیبانی تماس بگیرید.")
+        await ack("رد شد")
+    else:
+        created = {}
+
+        def _approve(db):
+            row = (db.get("orders") or {}).get(oid)
+            if not row or row.get("status") != "pending":
+                raise VoucherError("already-used")
+            plan = _plan_by_id(db, row.get("plan_id"))
+            if not plan:
+                raise VoucherError("plan-gone")
+            if len(db["inbounds"]) >= MAX_INBOUNDS:
+                raise VoucherError("panel-full")
+
+            settings = db.get("settings") or {}
+            now = time.time()
+            days = int(plan.get("days") or 0)
+            ib = {
+                "uid": gen_uid(), "uuid": gen_uuid(), "sub_token": gen_uid(),
+                "ip_log": {}, "plan_id": plan["id"], "owner": None,
+                "name": f"{plan.get('name', 'plan')}-{oid}"[:64],
+                "enabled": True, "created_at": now,
+                "expire_at": (now + days * 86400) if days > 0 else None,
+                "expire_days": days,
+                "quota_gb": plan.get("quota_gb", 0),
+                "max_connections": plan.get("max_connections", 0),
+                "max_requests": plan.get("max_requests", 0),
+                "used_up": 0, "used_down": 0, "request_count": 0,
+                "strict_single_ip": False, "note": f"order {oid}",
+                "fp": settings.get("default_fingerprint", "chrome"),
+                "history": [],
+            }
+            db["inbounds"].append(ib)
+            row["status"] = "approved"
+            row["uid"] = ib["uid"]
+            # Bound straight away, so /status works without another step.
+            db.setdefault("bot_bindings", {})[str(customer_chat)] = ib["uid"]
+            (db.get("shop_selections") or {}).pop(str(customer_chat), None)
+            _record_sale(db, ib, plan, None, "shop")
+            created.update(ib)
+
+        try:
+            db = await store.mutate(_approve)
+        except VoucherError as e:
+            await ack("انجام نشد: " + e.reason)
+            return
+
+        admin_text = (f"✅ سفارش <b>{userbot._escape(entry.get('plan_name'))}</b> "
+                      f"تأیید شد و اکانت ساخته شد.")
+        configs = build_configs_for_origin(db, created, _bot_origin(db))
+        user_text = ("🎉 سفارش شما تأیید شد!\n\n" + userbot.render_config(
+            f"{_bot_origin(db)}/sub/{sub_token_of(created)}", configs, panel))
+        await ack("تأیید شد")
+
+    message_id = entry.get("admin_message_id") or (callback.get("message") or {}).get("message_id")
+    if message_id:
+        try:
+            await userbot.edit_message(admin_token, admin_chat, message_id, admin_text)
+        except userbot.UserBotError:
+            pass
+    if user_token and customer_chat is not None:
+        try:
+            await userbot.send(user_token, customer_chat, user_text)
+        except userbot.UserBotError:
+            pass
 
 
 async def _handle_renew_callback(callback: dict):
@@ -1970,7 +2291,7 @@ BOOL_SETTINGS = {
     "auto_backup_enabled", "userbot_enabled", "cleanup_enabled", "trial_enabled",
     "userbot_renew_enabled", "health_check_enabled", "health_auto_disable",
     "sharing_detect_enabled", "sharing_auto_disable", "voucher_redeem_enabled",
-    "trial_selfserve_enabled", "notify_customer_enabled",
+    "trial_selfserve_enabled", "notify_customer_enabled", "shop_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
@@ -1978,6 +2299,7 @@ TEXT_SETTINGS = {
     "panel_name": 40, "telegram_contact": 200,
     "telegram_bot_token": 100, "telegram_chat_id": 40,
     "userbot_token": 100, "trial_prefix": 40, "currency": 12,
+    "shop_instructions": 600,
 }
 # Numeric settings: name -> (min, max)
 INT_SETTINGS = {

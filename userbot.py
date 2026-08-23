@@ -19,6 +19,7 @@ Design constraints that shaped it:
   than accumulating, so a resold account cannot quietly keep the old owner
   subscribed to its usage.
 """
+import json
 import time
 from typing import Dict, List, Optional
 
@@ -142,6 +143,7 @@ HELP = (
     "/start — شروع\n"
     "/bind &lt;کد&gt; — اتصال اشتراک شما به این چت\n"
     "/redeem &lt;کد-شارژ&gt; — فعال‌سازی اشتراک با کد خرید\n"
+    "/buy — خرید اشتراک\n"
     "/trial — دریافت اکانت تست رایگان\n"
     "/status — حجم و اعتبار باقی‌مانده\n"
     "/config — لینک اشتراک و کانفیگ\n"
@@ -366,6 +368,18 @@ async def handle_message(message: dict, ctx) -> Optional[str]:
         return ("🎉 اشتراک شما فعال شد!\n\n"
                 + render_config(outcome["sub_url"], outcome["configs"], ctx.panel_name))
 
+    if cmd == "buy":
+        if not getattr(ctx, "shop_enabled", False):
+            return SHOP_ERRORS["disabled"]
+        if ctx.has_open_order(chat):
+            return SHOP_ERRORS["pending"]
+        plans = ctx.shop_plans()
+        if not plans:
+            return SHOP_ERRORS["no-plans"]
+        await ctx.send_shop(chat, format_shop(ctx.panel_name, plans),
+                            shop_keyboard(plans))
+        return None
+
     if cmd == "trial":
         if not getattr(ctx, "trial_enabled", False):
             return TRIAL_ERRORS["disabled"]
@@ -403,6 +417,18 @@ async def handle_message(message: dict, ctx) -> Optional[str]:
             return render_config(sub_url, configs, ctx.panel_name)
         return render_status(found["inbound"], found["status"], ctx.panel_name)
 
+    # A photo with no command is only ever a payment receipt, and only when
+    # the customer has a plan waiting for one.
+    if not cmd and largest_photo(message):
+        if not getattr(ctx, "shop_enabled", False):
+            return None
+        file_id = largest_photo(message)
+        outcome = await ctx.submit_receipt(chat, file_id)
+        if outcome.get("error"):
+            return SHOP_ERRORS.get(outcome["error"], "❌ انجام نشد.")
+        return ("✅ رسید شما دریافت شد و برای فروشنده ارسال شد.\n\n"
+                "نتیجه‌ی بررسی همین‌جا اعلام می‌شود.")
+
     if cmd:
         return "دستور ناشناخته.\n\n" + HELP
     return None
@@ -415,3 +441,140 @@ def prune_bindings(bindings: dict) -> bool:
     for key in list(bindings)[: len(bindings) - MAX_BINDINGS]:
         bindings.pop(key, None)
     return True
+
+
+# ------------------------------------------------------------------ shop
+SHOP_ERRORS = {
+    "disabled": "فروش از ربات فعال نیست. برای خرید با پشتیبانی در تماس باشید.",
+    "no-plans": "هنوز پلنی برای فروش تعریف نشده. با پشتیبانی تماس بگیرید.",
+    "plan-gone": "این پلن دیگر موجود نیست. دوباره /buy را بزنید.",
+    "no-order": "سفارش بازی ندارید. برای شروع /buy را بزنید.",
+    "pending": "یک سفارش در انتظار بررسی دارید. لطفاً تا اعلام نتیجه صبر کنید.",
+    "too-large": "حجم عکس زیاد است. لطفاً تصویر کوچک‌تری بفرستید.",
+}
+
+
+async def send_photo_bytes(token: str, chat_id, blob: bytes, caption: str,
+                           keyboard: Optional[list] = None) -> dict:
+    """Upload raw image bytes.
+
+    A file_id belongs to the bot that received it, so a receipt taken in by
+    the customer bot cannot be re-sent by the alert bot. The bytes have to
+    make the trip.
+    """
+    url = f"{TELEGRAM_API}/bot{token}/sendPhoto"
+    files = {"photo": ("receipt.jpg", blob, "image/jpeg")}
+    data = {"chat_id": str(chat_id), "caption": caption[:1000], "parse_mode": "HTML"}
+    if keyboard:
+        data["reply_markup"] = json.dumps({"inline_keyboard": keyboard})
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            r = await client.post(url, data=data, files=files)
+        body = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise UserBotError(f"telegram-unreachable: {e}") from e
+    if not body.get("ok"):
+        raise UserBotError(body.get("description") or f"error-{r.status_code}")
+    return body["result"]
+
+
+async def download_file(token: str, file_id: str, max_bytes: int) -> bytes:
+    """Fetch a file the bot was sent, refusing anything oversized."""
+    meta = await _call(token, "getFile", file_id=file_id)
+    path = meta.get("file_path")
+    if not path:
+        raise UserBotError("no-file-path")
+    if (meta.get("file_size") or 0) > max_bytes:
+        raise UserBotError("too-large")
+
+    url = f"{TELEGRAM_API}/file/bot{token}/{path}"
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code != 200:
+                    raise UserBotError(f"download-{resp.status_code}")
+                chunks, total = [], 0
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    # The size in getFile is advisory; enforce it here too so a
+                    # lying or chunked response cannot blow up memory.
+                    if total > max_bytes:
+                        raise UserBotError("too-large")
+                    chunks.append(chunk)
+    except httpx.HTTPError as e:
+        raise UserBotError(f"telegram-unreachable: {e}") from e
+    return b"".join(chunks)
+
+
+def largest_photo(message: dict) -> Optional[str]:
+    """Telegram sends every rendered size; the last is the biggest."""
+    photos = message.get("photo")
+    if not isinstance(photos, list) or not photos:
+        return None
+    best = max(photos, key=lambda p: (p.get("file_size") or 0))
+    return best.get("file_id")
+
+
+def shop_keyboard(plans: List[dict]) -> list:
+    """One plan per row: names and prices are too long to sit side by side."""
+    rows = []
+    for plan in plans[:20]:
+        label = plan["name"]
+        if plan.get("price"):
+            label += f" — {plan['price']:,} {plan.get('currency', 'تومان')}"
+        rows.append([{"text": label[:60], "callback_data": f"buy:{plan['id']}"}])
+    return rows
+
+
+def order_keyboard(order_id: str) -> list:
+    return [[
+        {"text": "✅ تأیید و ساخت اکانت", "callback_data": f"ord:{order_id}:ok"},
+        {"text": "❌ رد", "callback_data": f"ord:{order_id}:no"},
+    ]]
+
+
+def format_shop(panel: str, plans: List[dict]) -> str:
+    lines = [f"🛒 <b>{_escape(panel)}</b>", "", "یکی از پلن‌ها را انتخاب کنید:", ""]
+    for plan in plans[:20]:
+        bits = []
+        if plan.get("quota_gb"):
+            bits.append(f"{plan['quota_gb']:g} گیگ")
+        else:
+            bits.append("حجم نامحدود")
+        bits.append(f"{plan['days']} روزه" if plan.get("days") else "بدون انقضا")
+        if plan.get("max_connections"):
+            bits.append(f"{plan['max_connections']} دستگاه")
+        price = f"{plan['price']:,} {plan.get('currency', 'تومان')}" if plan.get("price") else "—"
+        lines.append(f"• <b>{_escape(plan['name'])}</b> — {' · '.join(bits)} — <b>{price}</b>")
+    return "\n".join(lines)
+
+
+def format_payment(panel: str, plan: dict, instructions: str) -> str:
+    price = f"{plan['price']:,} {plan.get('currency', 'تومان')}" if plan.get("price") else "—"
+    return (
+        f"💳 <b>{_escape(panel)}</b>\n\n"
+        f"پلن انتخابی: <b>{_escape(plan['name'])}</b>\n"
+        f"مبلغ قابل پرداخت: <b>{price}</b>\n\n"
+        f"{instructions}\n\n"
+        "پس از واریز، <b>عکس رسید</b> را همین‌جا بفرستید. "
+        "سفارش شما بعد از تأیید فروشنده فعال می‌شود."
+    )
+
+
+def format_order_for_admin(panel: str, plan_name: str, price, chat_id) -> str:
+    amount = f"{price:,}" if isinstance(price, int) else str(price)
+    return (
+        f"🧾 <b>{_escape(panel)}</b> — سفارش جدید\n\n"
+        f"پلن: <b>{_escape(plan_name)}</b>\n"
+        f"مبلغ: <b>{amount}</b>\n"
+        f"چت مشتری: <code>{_escape(chat_id)}</code>\n\n"
+        "رسید بالا را بررسی کنید."
+    )
+
+
+def parse_order_callback(data: str) -> tuple:
+    """'ord:<id>:ok' -> (id, True). Anything else -> (None, None)."""
+    parts = (data or "").split(":")
+    if len(parts) != 3 or parts[0] != "ord":
+        return None, None
+    return parts[1], parts[2] == "ok"
