@@ -13,6 +13,8 @@
   let resellers = [];
   let isOwner = true;
   let sharingThreshold = 0;
+  let vouchers = [];
+  let currency = 'تومان';
   let lastHourly = [];
   let filterText = '';
   let filterStatus = '';
@@ -72,6 +74,7 @@
     set('settingNotifyPercent', s.notify_quota_percent != null ? s.notify_quota_percent : 80);
     check('settingNotifyExpiry', s.notify_expiry_enabled !== false);
     check('settingRenewEnabled', !!s.userbot_renew_enabled);
+    check('settingVoucherRedeem', !!s.voucher_redeem_enabled);
     set('settingRenewOptions', (s.userbot_renew_options || [30, 60, 90]).join(','));
     check('settingAutoBackup', !!s.auto_backup_enabled);
     check('settingCleanup', !!s.cleanup_enabled);
@@ -143,6 +146,7 @@
   const titleKeys = {
     dashboard: 'nav_dashboard', inbounds: 'nav_inbounds', plans: 'nav_plans',
     resellers: 'nav_resellers', endpoints: 'nav_endpoints', traffic: 'nav_traffic',
+    sales: 'nav_sales',
     security: 'nav_security', notifications: 'nav_notifications', settings: 'nav_settings',
   };
 
@@ -154,6 +158,7 @@
     if (name === 'inbounds' || name === 'traffic') loadInbounds();
     if (name === 'plans') loadPlans();
     if (name === 'resellers') loadResellers();
+    if (name === 'sales') { loadSales(); loadVouchers(); }
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security' && isOwner) { loadTwofaStatus(); loadLoginLog(); }
     if (name === 'settings') { loadBackupStatus(); loadCleanupStatus(); }
@@ -183,7 +188,7 @@
     b.addEventListener('click', () => {
       PEYK.setLang(b.dataset.lang);
       viewTitle.textContent = PEYK.t(viewTitle.getAttribute('data-i18n'));
-      renderInbounds(); renderTrafficTable(); renderPlans(); renderResellers();
+      renderInbounds(); renderTrafficTable(); renderPlans(); renderResellers(); renderVouchers();
       PEYK.playSfx('toggle', 0.25);
     });
   });
@@ -654,6 +659,7 @@
         <td data-label="${esc(PEYK.t('inb_quota'))}" class="mono small">${p.quota_gb ? esc(p.quota_gb) + ' GB' : esc(PEYK.t('unlimited'))}</td>
         <td data-label="${esc(PEYK.t('inb_expire'))}" class="mono small">${p.days ? esc(p.days) + ' ' + esc(PEYK.t('inb_days_left')) : esc(PEYK.t('unlimited'))}</td>
         <td data-label="${esc(PEYK.t('inb_max_conn'))}" class="mono small">${p.max_connections || esc(PEYK.t('unlimited'))}</td>
+        <td data-label="${esc(PEYK.t('plans_price'))}" class="mono small">${p.price ? fmtMoney(p.price) : '—'}</td>
         <td data-label="${esc(PEYK.t('inb_actions'))}">
           <div class="row-actions">
             <button class="icon-btn btn-sm" data-plan-action="use" data-id="${esc(p.id)}" title="${esc(PEYK.t('inb_bulk_create'))}"><svg><use href="#icon-layers"/></svg></button>
@@ -695,6 +701,7 @@
     $('planDays').value = plan ? (plan.days || '') : '';
     $('planMaxConn').value = plan ? (plan.max_connections || '') : '';
     $('planMaxReq').value = plan ? (plan.max_requests || '') : '';
+    $('planPrice').value = plan ? (plan.price || '') : '';
     openModal('planModal');
   }
   $('addPlanBtn').addEventListener('click', () => openPlanModal());
@@ -707,6 +714,7 @@
       days: num('planDays'),
       max_connections: num('planMaxConn'),
       max_requests: num('planMaxReq'),
+      price: num('planPrice'),
     };
     if (!body.name) { PEYK.toast(PEYK.t('plans_name_required'), 'error'); return; }
     const btn = $('planSaveBtn');
@@ -721,6 +729,153 @@
       PEYK.toast(e.detail || 'error', 'error');
     } finally { PEYK.setLoading(btn, false); }
   });
+
+
+  // ---------------- sales + vouchers ----------------
+  /* Grouped thousands, no decimals: these are Toman figures, and a fractional
+     Toman is not a thing anyone writes. */
+  function fmtMoney(n) {
+    return (Number(n) || 0).toLocaleString(PEYK.getLang() === 'fa' ? 'fa-IR' : 'en-US');
+  }
+
+  async function loadSales() {
+    const days = $('salesPeriod').value || 30;
+    try {
+      const r = await PEYK.api(`/api/sales?days=${days}`);
+      currency = r.currency || 'تومان';
+      $('salesTotal').textContent = `${fmtMoney(r.total)} ${currency}`;
+      $('salesCount').textContent = r.count;
+      renderSalesTable('salesBySellerBody', r.by_seller,
+        row => row.seller || PEYK.t('sl_me'));
+      renderSalesTable('salesByPlanBody', r.by_plan, row => row.plan);
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function renderSalesTable(bodyId, rows, label) {
+    const tbody = $(bodyId);
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="3" class="small muted" style="text-align:center; padding:20px;">${esc(PEYK.t('sl_nothing'))}</td></tr>`;
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td data-label="${esc(PEYK.t('sl_seller'))}"><b>${esc(label(row))}</b></td>
+        <td data-label="${esc(PEYK.t('sl_count'))}" class="mono small">${esc(row.count)}</td>
+        <td data-label="${esc(PEYK.t('sl_total'))}" class="mono small" style="text-align:end;">${esc(fmtMoney(row.total))}</td>`;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+  }
+
+  $('salesPeriod').addEventListener('change', loadSales);
+
+  async function loadVouchers() {
+    try {
+      const r = await PEYK.api('/api/vouchers');
+      vouchers = r.vouchers || [];
+      renderVouchers();
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function renderVouchers() {
+    const tbody = $('vouchersTableBody');
+    if (!tbody) return;
+    const unused = vouchers.filter(v => !v.used_at);
+    $('voucherUnused').textContent = unused.length;
+    $('voucherTotal').textContent = vouchers.length;
+    $('vouchersEmpty').style.display = vouchers.length ? 'none' : 'block';
+    tbody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    vouchers.forEach(v => {
+      const used = !!v.used_at;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td data-label="${esc(PEYK.t('sl_code'))}"><b class="mono">${esc(v.code)}</b></td>
+        <td data-label="${esc(PEYK.t('plans_name'))}" class="small">${esc(v.plan_name || '-')}${v.price ? ` <span class="muted mono">${esc(fmtMoney(v.price))}</span>` : ''}</td>
+        <td data-label="${esc(PEYK.t('sl_state'))}">
+          <span class="pill ${used ? 'pill-muted' : 'pill-on'}"><span class="pill-dot"></span>${esc(PEYK.t(used ? 'sl_used' : 'sl_unused'))}</span>
+        </td>
+        <td data-label="${esc(PEYK.t('sl_used_by'))}" class="small muted">${used ? esc(v.used_name || '-') : '—'}</td>
+        <td data-label="${esc(PEYK.t('inb_actions'))}">
+          <div class="row-actions">
+            <button class="icon-btn btn-sm" data-vc-action="copy" data-code="${esc(v.code)}" title="${esc(PEYK.t('copy'))}"><svg><use href="#icon-copy"/></svg></button>
+            ${used ? '' : `<button class="icon-btn btn-sm" data-vc-action="delete" data-code="${esc(v.code)}" title="${esc(PEYK.t('delete'))}" style="color:var(--err)"><svg><use href="#icon-trash"/></svg></button>`}
+          </div>
+        </td>`;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+  }
+
+  $('vouchersTableBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-vc-action]');
+    if (!btn) return;
+    const code = btn.dataset.code;
+    if (btn.dataset.vcAction === 'copy') {
+      await copyText(code);
+      return;
+    }
+    if (!confirm(PEYK.t('sl_delete_confirm'))) return;
+    try {
+      await PEYK.api(`/api/vouchers/${code}`, { method: 'DELETE' });
+      PEYK.toast(PEYK.t('sl_deleted'), 'success');
+      loadVouchers();
+    } catch (err) { PEYK.toast(err.detail || 'error', 'error'); }
+  });
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      PEYK.toast(PEYK.t('copied'), 'success');
+    } catch (e) {
+      PEYK.toast(PEYK.t('copy_failed'), 'error');
+    }
+  }
+
+  $('copyUnusedBtn').addEventListener('click', () => {
+    const unused = vouchers.filter(v => !v.used_at).map(v => v.code);
+    if (!unused.length) { PEYK.toast(PEYK.t('sl_nothing_to_copy'), 'error'); return; }
+    copyText(unused.join('\n'));
+  });
+
+  $('addVoucherBtn').addEventListener('click', () => {
+    fillPlanSelect('voucherPlan');
+    $('voucherCount').value = 10;
+    $('voucherNote').value = '';
+    $('voucherResult').style.display = 'none';
+    openModal('voucherModal');
+  });
+
+  $('voucherSaveBtn').addEventListener('click', async () => {
+    const planId = $('voucherPlan').value;
+    if (!planId) { PEYK.toast(PEYK.t('sl_pick_plan'), 'error'); return; }
+    const btn = $('voucherSaveBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/vouchers', {
+        method: 'POST',
+        body: {
+          plan_id: planId,
+          count: parseInt($('voucherCount').value, 10) || 1,
+          note: $('voucherNote').value.trim(),
+        },
+      });
+      const codes = r.vouchers.map(v => v.code).join('\n');
+      $('voucherCodes').value = codes;
+      $('voucherResult').style.display = '';
+      PEYK.toast(PEYK.t('sl_minted').replace('{n}', r.vouchers.length), 'success');
+      loadVouchers();
+      loadSales();
+    } catch (e) {
+      PEYK.toast(apiErrorText(e.detail), 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
+
+  $('copyNewCodesBtn').addEventListener('click', () => copyText($('voucherCodes').value));
 
 
   // ---------------- anti-sharing ----------------
@@ -1706,6 +1861,7 @@
     if (!days.length) { PEYK.toast(PEYK.t('rn_options_bad'), 'error'); return; }
     saveSettings('saveRenewBtn', {
       userbot_renew_enabled: $('settingRenewEnabled').checked,
+      voucher_redeem_enabled: $('settingVoucherRedeem').checked,
       userbot_renew_options: days,
     }, () => loadRenewRequests(false));
   });

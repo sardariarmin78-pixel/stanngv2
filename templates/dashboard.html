@@ -35,6 +35,7 @@
       <div class="nav-item" data-view="resellers" data-owner-only><svg><use href="#icon-reseller"/></svg><span data-i18n="nav_resellers">نمایندگان</span><span class="badge" id="navResellerCount">0</span></div>
       <div class="nav-item" data-view="endpoints" data-owner-only><svg><use href="#icon-globe"/></svg><span data-i18n="nav_endpoints">لوکیشن‌ها</span><span class="badge" id="navEndpointCount">0</span></div>
       <div class="nav-item" data-view="traffic"><svg><use href="#icon-traffic"/></svg><span data-i18n="nav_traffic">ترافیک</span></div>
+      <div class="nav-item" data-view="sales"><svg><use href="#icon-wallet"/></svg><span data-i18n="nav_sales">فروش</span></div>
       <div class="nav-label" data-i18n="nav_group_system">سیستم</div>
       <div class="nav-item" data-view="security"><svg><use href="#icon-shield"/></svg><span data-i18n="nav_security">امنیت</span></div>
       <div class="nav-item" data-view="notifications" data-owner-only><svg><use href="#icon-bell"/></svg><span data-i18n="nav_notifications">اعلان‌ها</span></div>
@@ -242,6 +243,7 @@
                     <th data-i18n="inb_quota">حجم</th>
                     <th data-i18n="inb_expire">مدت</th>
                     <th data-i18n="inb_max_conn">اتصال همزمان</th>
+                    <th data-i18n="plans_price">قیمت</th>
                     <th style="text-align:end;" data-i18n="inb_actions">عملیات</th>
                   </tr>
                 </thead>
@@ -387,6 +389,97 @@
           </div>
         </div>
       </section>
+
+      <!-- ============ SALES ============ -->
+      <section class="view" id="view-sales">
+        <div class="grid mb-16">
+          <div class="col-4 win stat-card">
+            <div class="label"><svg><use href="#icon-wallet"/></svg><span data-i18n="sl_revenue">درآمد دوره</span></div>
+            <div class="value" id="salesTotal">0</div>
+            <div class="small muted mt-8"><span id="salesCount">0</span> <span data-i18n="sl_sold">فروش</span></div>
+          </div>
+          <div class="col-4 win stat-card">
+            <div class="label"><svg><use href="#icon-ticket"/></svg><span data-i18n="sl_codes_unused">کدهای استفاده‌نشده</span></div>
+            <div class="value" id="voucherUnused">0</div>
+            <div class="small muted mt-8"><span id="voucherTotal">0</span> <span data-i18n="sl_codes_total">کد ساخته‌شده</span></div>
+          </div>
+          <div class="col-4 win">
+            <div class="win-head"><h3><svg><use href="#icon-clock"/></svg><span data-i18n="sl_period">بازه</span></h3></div>
+            <div class="win-body">
+              <select class="input" id="salesPeriod">
+                <option value="7" data-i18n="sl_7">۷ روز گذشته</option>
+                <option value="30" selected data-i18n="sl_30">۳۰ روز گذشته</option>
+                <option value="90" data-i18n="sl_90">۹۰ روز گذشته</option>
+                <option value="365" data-i18n="sl_365">یک سال گذشته</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid mb-16">
+          <div class="col-6 win" data-owner-only>
+            <div class="win-head"><h3><svg><use href="#icon-reseller"/></svg><span data-i18n="sl_by_seller">به تفکیک فروشنده</span></h3></div>
+            <div class="win-body no-pad">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th data-i18n="sl_seller">فروشنده</th>
+                    <th data-i18n="sl_count">تعداد</th>
+                    <th style="text-align:end;" data-i18n="sl_total">مبلغ</th>
+                  </tr></thead>
+                  <tbody id="salesBySellerBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="col-6 win">
+            <div class="win-head"><h3><svg><use href="#icon-layers"/></svg><span data-i18n="sl_by_plan">به تفکیک پلن</span></h3></div>
+            <div class="win-body no-pad">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th data-i18n="plans_name">پلن</th>
+                    <th data-i18n="sl_count">تعداد</th>
+                    <th style="text-align:end;" data-i18n="sl_total">مبلغ</th>
+                  </tr></thead>
+                  <tbody id="salesByPlanBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="win">
+          <div class="win-head">
+            <h3><svg><use href="#icon-ticket"/></svg><span data-i18n="sl_codes">کدهای شارژ</span></h3>
+            <div class="win-head-tools">
+              <button class="btn btn-sm" id="copyUnusedBtn"><svg><use href="#icon-copy"/></svg><span data-i18n="sl_copy_unused">کپی کدهای استفاده‌نشده</span></button>
+              <button class="btn btn-primary btn-sm" id="addVoucherBtn"><svg><use href="#icon-plus"/></svg><span data-i18n="sl_new_codes">ساخت کد</span></button>
+            </div>
+          </div>
+          <div class="win-body no-pad">
+            <div class="small muted" style="padding:12px 16px; border-bottom:1px solid var(--border);" data-i18n="sl_codes_hint">پول را هرطور که همیشه می‌گیری بگیر و فقط یک کد بده. مشتری کد را در ربات با دستور /redeem می‌زند و اشتراکش همان لحظه ساخته می‌شود — بدون اینکه تو کاری کنی.</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr>
+                  <th data-i18n="sl_code">کد</th>
+                  <th data-i18n="plans_name">پلن</th>
+                  <th data-i18n="sl_state">وضعیت</th>
+                  <th data-i18n="sl_used_by">استفاده‌شده برای</th>
+                  <th style="text-align:end;" data-i18n="inb_actions">عملیات</th>
+                </tr></thead>
+                <tbody id="vouchersTableBody"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="vouchersEmpty" style="display:none;">
+              <svg><use href="#icon-ticket"/></svg>
+              <div class="title" data-i18n="sl_codes_empty">هنوز کدی ساخته نشده</div>
+              <div class="small" data-i18n="sl_codes_empty_hint">اول یک پلن با قیمت بساز، بعد از روی آن کد بزن</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
 
       <!-- ============ SECURITY ============ -->
       <section class="view" id="view-security">
@@ -574,6 +667,13 @@
             </div>
             <div class="win-body">
               <div class="small muted mb-16" data-i18n="rn_hint">کاربر در ربات دستور /renew می‌زند، برای شما پیامی با دکمه‌های تأیید می‌آید و با یک تپ تمدید انجام می‌شود. حجم مصرفی هم از نو شروع می‌شود.</div>
+              <div class="setting-row">
+                <div>
+                  <div class="title" data-i18n="sl_redeem_enable">فعال‌سازی با کد شارژ در ربات</div>
+                  <div class="hint" data-i18n="sl_redeem_hint">مشتری با دستور /redeem کد خریدش را می‌زند و اشتراکش خودکار ساخته می‌شود. بدون کد معتبر هیچ‌کس نمی‌تواند چیزی بسازد.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingVoucherRedeem"><span class="track"><span class="thumb"></span></span></label>
+              </div>
               <div class="setting-row">
                 <div>
                   <div class="title" data-i18n="rn_enable">فعال باشد</div>
@@ -1079,6 +1179,11 @@
           <label data-i18n="inb_max_req">سقف درخواست</label>
           <input class="input" type="number" id="planMaxReq" min="0" step="1" placeholder="0 = ∞">
         </div>
+        <div class="field span-2">
+          <label data-i18n="plans_price">قیمت فروش</label>
+          <input class="input" type="number" id="planPrice" min="0" step="1000" placeholder="0">
+          <div class="small muted mt-8" data-i18n="plans_price_hint">برای گزارش فروش و کدهای شارژ استفاده می‌شود. صفر یعنی این پلن فروشی نیست.</div>
+        </div>
       </div>
     </div>
     <div class="modal-foot">
@@ -1112,6 +1217,40 @@
     <div class="modal-foot">
       <button class="btn btn-ghost" data-close-modal="networksModal"><span data-i18n="close">بستن</span></button>
       <button class="btn btn-danger" id="clearFlagBtn"><span data-i18n="shr_clear">پاک کردن سابقه و شروع دوباره</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: mint codes ============ -->
+<div class="modal-overlay" id="voucherModal">
+  <div class="modal" style="max-width:460px;">
+    <div class="modal-head">
+      <h3 data-i18n="sl_new_codes">ساخت کد</h3>
+      <button class="icon-btn" data-close-modal="voucherModal" aria-label="close"><svg><use href="#icon-plus" style="transform:rotate(45deg)"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label data-i18n="sl_from_plan">از روی پلن</label>
+        <select class="input" id="voucherPlan"></select>
+      </div>
+      <div class="field">
+        <label data-i18n="bulk_count">تعداد</label>
+        <input class="input" type="number" id="voucherCount" min="1" max="200" step="1" value="10" style="direction:ltr;">
+      </div>
+      <div class="field">
+        <label data-i18n="rs_note">توضیح</label>
+        <input class="input" type="text" id="voucherNote" maxlength="200" data-i18n-placeholder="sl_note_ph" placeholder="مثلاً: سفارش دیجی‌کالا">
+      </div>
+      <div id="voucherResult" style="display:none;">
+        <hr>
+        <div class="small muted mb-8" data-i18n="sl_result_hint">این کدها را کپی کن و به مشتری بده. بعداً هم در جدول پایین هستند.</div>
+        <textarea class="input mono" id="voucherCodes" rows="6" readonly style="direction:ltr; resize:vertical;"></textarea>
+        <button class="btn btn-sm w-full mt-8" id="copyNewCodesBtn"><svg><use href="#icon-copy"/></svg><span data-i18n="copy">کپی</span></button>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close-modal="voucherModal"><span data-i18n="close">بستن</span></button>
+      <button class="btn btn-primary" id="voucherSaveBtn"><span data-i18n="sl_mint">بساز</span></button>
     </div>
   </div>
 </div>

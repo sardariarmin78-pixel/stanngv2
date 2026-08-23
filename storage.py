@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 13  # v13: anti-sharing network log
+SCHEMA_VERSION = 15  # v15: voucher codes
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -281,6 +281,16 @@ def normalize_db(db: Dict[str, Any]) -> bool:
         if not isinstance(ib.get("ip_log"), dict):
             ib["ip_log"] = {}
             changed = True
+
+    if not isinstance(db.get("vouchers"), list):
+        db["vouchers"] = []
+        changed = True
+
+    # Append-only record of what was sold, so revenue survives a plan edit
+    # or the customer being deleted.
+    if not isinstance(db.get("sales"), list):
+        db["sales"] = []
+        changed = True
 
     if not isinstance(db.get("resellers"), list):
         db["resellers"] = []
