@@ -16,6 +16,7 @@ Version 1.6.0
 import asyncio
 import base64
 import io
+import json
 import os
 import re
 import secrets
@@ -44,6 +45,7 @@ import subscription
 import totp
 import migrate
 import userbot
+import xray_manager
 from colo_map import describe_colo
 from storage import (
     DATA_DIR as DATA_DIR_PATH,
@@ -53,7 +55,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.7.0"
+APP_VERSION = "3.8.0"
 
 
 def _env_raw(name: str):
@@ -120,6 +122,8 @@ BACKUP_CHECK_INTERVAL = 900 # seconds: how often to consider an auto-backup
 CLEANUP_INTERVAL = 3600     # seconds: how often to sweep expired accounts
 HEALTH_MIN_INTERVAL = 60    # seconds: floor on the endpoint probe interval
 USERBOT_IDLE_SLEEP = 3      # seconds to back off after a bot polling error
+XRAY_STATS_INTERVAL = 5     # seconds between xray traffic polls
+XRAY_RECONCILE_INTERVAL = 30  # seconds between full panel/xray diffs
 JOURNAL_INTERVAL = 1        # seconds: publish this worker's runtime slice
 
 # One event loop saturates a single core, and measured aggregate throughput
@@ -201,6 +205,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[peyk] self-restore error: {e}", flush=True)
 
+    # Xray owns the data plane when its binary is present. Only the leader
+    # runs it: N workers would each spawn a copy fighting for the same ports.
+    if xray_manager.available() and _is_leader():
+        db = await store.get()
+        if xray_manager.start(db["inbounds"], db.get("settings")):
+            print(f"[peyk] xray-core started ({xray_manager.version()})", flush=True)
+    elif not xray_manager.available():
+        print("[peyk] xray not installed; using the built-in Python relay",
+              flush=True)
+
     tasks = [
         asyncio.create_task(_periodic_flush()),
         asyncio.create_task(_journal_loop()),
@@ -213,6 +227,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_cleanup_loop()),
         asyncio.create_task(_health_loop()),
         asyncio.create_task(_sharing_loop()),
+        asyncio.create_task(_xray_stats_loop()),
+        asyncio.create_task(_xray_reconcile_loop()),
     ]
     try:
         yield
@@ -230,6 +246,7 @@ async def lifespan(app: FastAPI):
             j.remove()
         if runtime["leader"] is not None:
             runtime["leader"].release()
+        xray_manager.stop()
 
 
 app = FastAPI(title=DEFAULT_PANEL_NAME, version=APP_VERSION, lifespan=lifespan)
@@ -2084,6 +2101,101 @@ async def _health_loop():
             break
         except Exception:
             await asyncio.sleep(60)
+def xray_active() -> bool:
+    """True when xray is carrying traffic rather than the Python relay."""
+    return xray_manager.available() and xray_manager.running()
+
+
+async def _xray_stats_loop():
+    """Fold xray's per-user counters into the same buffers the relay uses.
+
+    Downstream accounting, quota enforcement and history then work unchanged
+    regardless of which data plane is in use.
+    """
+    while True:
+        try:
+            await asyncio.sleep(XRAY_STATS_INTERVAL)
+            if not xray_active():
+                continue
+            deltas = await xray_manager.stats_deltas()
+            for uid, delta in deltas.items():
+                bucket = runtime["pending_traffic"].setdefault(uid, {"up": 0, "down": 0})
+                bucket["up"] += delta.get("up", 0)
+                bucket["down"] += delta.get("down", 0)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(10)
+
+
+def _xray_should_serve(db) -> set:
+    """The uids xray ought to be carrying right now.
+
+    Deliberately built from inbound_status() rather than the `enabled` flag.
+    The Python relay re-checks quota and expiry on every connection, but xray
+    only knows a uuid is valid, so an expired customer would keep working
+    unless they are actually removed from it.
+    """
+    return {ib["uid"] for ib in db.get("inbounds", [])
+            if ib.get("uuid") and ib.get("uid") and inbound_status(ib)["live_enabled"]}
+
+
+async def _xray_reconcile_loop():
+    """Bring xray back in line with the panel, whatever changed it.
+
+    Users are created and removed in a dozen places -- the shop, vouchers,
+    self-serve trials, imports, bulk actions, reseller deletion, the retention
+    sweep -- and hooking each one is a rule every future feature has to
+    remember. Diffing the whole set instead covers all of them, costs one set
+    comparison, and heals a live API call that silently failed.
+    """
+    while True:
+        try:
+            await asyncio.sleep(XRAY_RECONCILE_INTERVAL)
+            if not xray_active() or not _is_leader():
+                continue
+            db = await store.get()
+            settings = db.get("settings")
+            want = _xray_should_serve(db)
+            have = xray_manager.live_uids()
+
+            for uid in have - want:
+                await xray_manager.remove_user(uid, settings)
+            by_uid = {ib["uid"]: ib for ib in db.get("inbounds", [])}
+            for uid in want - have:
+                ib = by_uid.get(uid)
+                if ib:
+                    await xray_manager.add_user(ib, settings)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(30)
+
+
+async def _xray_sync_user(ib: Optional[dict], uid: Optional[str] = None,
+                          removed: bool = False):
+    """Push one user change into a running xray without restarting it.
+
+    A restart would drop every other user's connection, which is why the
+    HandlerService API is used first and a reload is only the fallback.
+    """
+    if not xray_active():
+        return
+    db = await store.get()
+    settings = db.get("settings")
+    try:
+        if removed:
+            ok = await xray_manager.remove_user(uid or (ib or {}).get("uid"), settings)
+        elif ib is not None and ib.get("enabled", True):
+            ok = await xray_manager.sync_user(ib, settings)
+        else:
+            ok = await xray_manager.remove_user((ib or {}).get("uid"), settings)
+    except Exception:
+        ok = False
+    if not ok:
+        # Falling back costs every live connection, so it is genuinely a last
+        # resort rather than the normal path.
+        await asyncio.to_thread(xray_manager.reload, db["inbounds"], settings)
 
 
 async def _keep_alive_loop():
@@ -2517,11 +2629,25 @@ async def api_update_settings(request: Request, user: Identity = Depends(require
 
     if "trial_gb" in payload:
         clean["trial_gb"] = _as_number(payload["trial_gb"], "trial_gb", 0, 1000, False)
+    if "xray_transports" in payload:
+        wanted = payload["xray_transports"]
+        if not isinstance(wanted, list):
+            raise HTTPException(400, "invalid-xray_transports")
+        # Drop unknown names rather than failing the whole save, but refuse an
+        # empty result: that would leave the data plane with no way in.
+        chosen = [t for t in wanted if t in xray_manager.TRANSPORTS]
+        if not chosen:
+            raise HTTPException(400, "invalid-xray_transports")
+        clean["xray_transports"] = chosen
 
     def _apply(db):
         db.setdefault("settings", {}).update(clean)
 
     db = await store.mutate(_apply)
+    # Changing which transports are offered changes xray's inbounds, which
+    # only a rebuild can apply.
+    if "xray_transports" in clean and xray_active():
+        await asyncio.to_thread(xray_manager.reload, db["inbounds"], db["settings"])
     return {"ok": True, "settings": db["settings"], **brand(db)}
 
 
@@ -2855,6 +2981,7 @@ async def api_create_inbound(request: Request, user: Identity = Depends(require_
         _record_sale(db, ib, plan, None if user.is_owner else user.id, "panel")
 
     await store.mutate(_apply)
+    await _xray_sync_user(ib)
     return {"ok": True, "inbound": serialize_inbound(ib)}
 
 
@@ -2877,6 +3004,7 @@ async def api_update_inbound(uid: str, request: Request, user: Identity = Depend
         result.update(ib)
 
     await store.mutate(_apply)
+    await _xray_sync_user(result)
     if not inbound_status(result)["live_enabled"]:
         await _disconnect_uid(uid)
     return {"ok": True, "inbound": serialize_inbound(result)}
@@ -2922,6 +3050,7 @@ async def api_delete_inbound(uid: str, user: Identity = Depends(require_auth)):
     await store.mutate(_apply)
     if not found["v"]:
         raise HTTPException(404, "not-found")
+    await _xray_sync_user(None, uid=uid, removed=True)
     await _disconnect_uid(uid)
     runtime["active"].pop(uid, None)
     runtime["pending_traffic"].pop(uid, None)
@@ -2972,6 +3101,8 @@ async def api_regenerate_uuid(uid: str, user: Identity = Depends(require_auth)):
         ib["uuid"] = gen_uuid()
 
     db = await store.mutate(_apply)
+    # A rotated uuid must reach xray, or the old credential keeps working.
+    await _xray_sync_user(inbound_by_uid(db, uid))
     await _disconnect_uid(uid)
     runtime["active"].pop(uid, None)
     return {"ok": True, "inbound": serialize_inbound(inbound_by_uid(db, uid))}
@@ -4068,6 +4199,8 @@ async def api_bulk_create(request: Request, user: Identity = Depends(require_aut
             _record_sale(db, row, plan_row, None if user.is_owner else user.id, "bulk")
 
     await store.mutate(_apply)
+    for ib in created:
+        await _xray_sync_user(ib)
     return {"ok": True, "created": len(created),
             "inbounds": [serialize_inbound(ib) for ib in created]}
 
@@ -4134,6 +4267,15 @@ async def api_bulk_action(request: Request, user: Identity = Depends(require_aut
             runtime["pending_traffic"].pop(uid, None)
             runtime["pending_requests"].pop(uid, None)
 
+    if xray_active():
+        db = await store.get()
+        if action == "delete":
+            for uid in uids:
+                await _xray_sync_user(None, uid=uid, removed=True)
+        elif action in ("enable", "disable"):
+            for uid in uids:
+                await _xray_sync_user(inbound_by_uid(db, uid))
+
     if not affected["n"]:
         raise HTTPException(404, "not-found")
     return {"ok": True, "action": action, "affected": affected["n"]}
@@ -4161,8 +4303,22 @@ async def api_inbound_history(uid: str, user: Identity = Depends(require_auth)):
 
 
 # ------------------------------------------------------------------ link building
+def _vmess_link(ib, address: str, port: int, path: str, sni: str,
+                alpn: str, host_header: str, remark: str) -> str:
+    """VMess links are a base64-encoded JSON blob, not a query string."""
+    payload = {
+        "v": "2", "ps": remark, "add": address, "port": str(port),
+        "id": ib["uuid"], "aid": "0", "scy": "auto", "net": "ws",
+        "type": "none", "host": host_header, "path": path,
+        "tls": "tls", "sni": sni, "alpn": alpn,
+    }
+    blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return "vmess://" + base64.b64encode(blob.encode("utf-8")).decode("ascii")
+
+
 def _vless_link(ib, address: str, port: int, path: str, sni: str, fp: str,
-                alpn: str, settings: dict, remark: str, host_header: str = "") -> str:
+                alpn: str, settings: dict, remark: str, host_header: str = "",
+                network: str = "ws") -> str:
     """One VLESS-over-WS URL.
 
     `address` is what the client dials; `host_header` is the Host the reverse
@@ -4171,7 +4327,7 @@ def _vless_link(ib, address: str, port: int, path: str, sni: str, fp: str,
     is what made v2rayNG reject these links before 1.4.1.
     """
     params = [
-        "encryption=none", "security=tls", "type=ws",
+        "encryption=none", "security=tls", f"type={network}",
         f"host={quote(host_header or address)}",
         f"path={quote(path, safe='/')}",
         f"sni={quote(sni)}",
@@ -4216,24 +4372,44 @@ def build_configs(request: Request, db, ib) -> list:
     return _build_configs(db, ib, public_host(request, db))
 
 
+def _active_transports(db) -> list:
+    """Which (kind, path, network, protocol) combinations to publish.
+
+    With the Python relay there is exactly one: VLESS over WebSocket on a
+    per-user path. Xray multiplexes every user onto shared paths and tells
+    them apart by uuid, so the path stops carrying the uid and several
+    transports become available at once.
+    """
+    if not xray_active():
+        return [{"kind": "vless-ws", "network": "ws", "protocol": "vless",
+                 "path": None, "label": ""}]
+    settings = db.get("settings") or {}
+    out = []
+    for kind in xray_manager.enabled_transports(settings):
+        spec = xray_manager.TRANSPORTS[kind]
+        out.append({
+            "kind": kind,
+            "network": spec["network"],
+            "protocol": spec["protocol"],
+            "path": spec["path"],
+            "label": {"vless-ws": "WS", "vmess-ws": "VMess",
+                      "vless-xhttp": "XHTTP"}.get(kind, kind),
+        })
+    return out
+
+
 def _build_configs(db, ib, default_host: str) -> list:
     settings = db.get("settings") or {}
     panel = brand(db)["panel_name"]
-    path = f"/ws/{ib['uid']}"
     default_fp = ib.get("fp") or settings.get("default_fingerprint", "chrome")
     default_alpn = settings.get("default_alpn", "http/1.1")
+    transports = _active_transports(db)
 
     eps = active_endpoints(db)
     if not eps:
         sni = (settings.get("sni_override") or "").strip() or default_host
-        remark = f"{panel}-{ib['name']}"
-        return [{
-            "name": "", "remark": remark, "address": default_host, "port": 443,
-            "uuid": ib["uuid"], "path": path, "sni": sni, "host": default_host,
-            "fp": default_fp, "alpn": default_alpn,
-            "link": _vless_link(ib, default_host, 443, path, sni,
-                                default_fp, default_alpn, settings, remark),
-        }]
+        eps = [{"id": None, "name": "", "address": default_host, "port": 443,
+                "host": default_host, "sni": sni, "fp": "", "alpn": ""}]
 
     out = []
     for ep in eps:
@@ -4241,7 +4417,8 @@ def _build_configs(db, ib, default_host: str) -> list:
         # The Host header must keep naming the deployment even when the client
         # dials a bare CDN IP, otherwise the reverse proxy cannot route it.
         host_header = (ep.get("host") or "").strip() or default_host
-        sni = (ep.get("sni") or "").strip() or (settings.get("sni_override") or "").strip() or host_header
+        sni = ((ep.get("sni") or "").strip()
+               or (settings.get("sni_override") or "").strip() or host_header)
         try:
             port = int(ep.get("port") or 443)
         except (TypeError, ValueError):
@@ -4249,16 +4426,34 @@ def _build_configs(db, ib, default_host: str) -> list:
         fp = (ep.get("fp") or "").strip() or default_fp
         alpn = (ep.get("alpn") or "").strip() or default_alpn
         label = (ep.get("name") or address).strip()
-        remark = f"{panel}-{ib['name']}-{label}"
-        link = _vless_link(ib, address, port, path, sni, fp, alpn,
-                           settings, remark, host_header=host_header)
-        out.append({
-            "id": ep.get("id"), "name": label, "remark": remark,
-            "address": address, "port": port,
-            "uuid": ib["uuid"], "path": path, "sni": sni, "host": host_header,
-            "fp": fp, "alpn": alpn,
-            "link": link,
-        })
+
+        for tr in transports:
+            path = tr["path"] or f"/ws/{ib['uid']}"
+            # XHTTP rides HTTP/2, so advertising http/1.1 would be wrong.
+            tr_alpn = "h2" if tr["network"] == "xhttp" else alpn
+            parts = [panel, ib["name"]]
+            if label:
+                parts.append(label)
+            if tr["label"] and len(transports) > 1:
+                parts.append(tr["label"])
+            remark = "-".join(parts)
+
+            if tr["protocol"] == "vmess":
+                link = _vmess_link(ib, address, port, path, sni, tr_alpn,
+                                   host_header, remark)
+            else:
+                link = _vless_link(ib, address, port, path, sni, fp, tr_alpn,
+                                   settings, remark, host_header=host_header,
+                                   network=tr["network"])
+
+            out.append({
+                "id": ep.get("id"), "name": label, "remark": remark,
+                "address": address, "port": port, "transport": tr["kind"],
+                "uuid": ib["uuid"], "path": path, "sni": sni, "host": host_header,
+                "fp": fp, "alpn": tr_alpn, "network": tr["network"],
+                "protocol": tr["protocol"],
+                "link": link,
+            })
     return out
 
 
@@ -4615,6 +4810,10 @@ async def api_restore(request: Request, user: Identity = Depends(require_owner))
 
     normalize_db(incoming)
     await store.replace(incoming)
+    # The entire user table changed, so a rebuild is the honest option here.
+    if xray_active():
+        await asyncio.to_thread(xray_manager.reload, incoming["inbounds"],
+                                incoming.get("settings"))
     resp = JSONResponse({"ok": True, "inbounds": len(incoming["inbounds"])})
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
@@ -5101,8 +5300,11 @@ def _serve():
     import uvicorn
 
     host = _platform_env("HOST", "0.0.0.0")
+    # In the container image nginx owns the public PORT and forwards to the
+    # panel on PANEL_PORT. Without a container, PORT is the panel's own.
+    raw_port = os.environ.get("PANEL_PORT") or _platform_env("PORT", 8000)
     try:
-        port = int(_platform_env("PORT", 8000))
+        port = int(raw_port)
     except (TypeError, ValueError):
         port = 8000
     log_level = _platform_env("LOG_LEVEL", "info")
