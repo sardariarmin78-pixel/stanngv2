@@ -428,6 +428,8 @@ window.I18N = {
   hl_auto_disable: { fa: "غیرفعال کردن خودکار لوکیشن خراب", en: "Auto-disable a dead location" },
   hl_auto_disable_hint: { fa: "لوکیشنی که جواب نمی‌دهد از لینک اشتراک کاربران حذف می‌شود.", en: "A location that stops responding is dropped from users' subscriptions." },
   // ---- v3.4.0: interface polish ----
+  ota_no_releases: { fa: "این ریپازیتوری هنوز نسخه‌ای (Release) منتشر نکرده، پس چیزی برای مقایسه نیست. در گیت‌هاب یک Release بسازید.", en: "This repository has never published a Release, so there is nothing to compare against. Create one on GitHub." },
+  "rs_err_no-releases-published": { fa: "هیچ نسخه‌ای در گیت‌هاب منتشر نشده است", en: "No release has been published on GitHub" },
   more: { fa: "بیشتر", en: "More" },
   // ---- v3.3.0: import from other panels ----
   im_title: { fa: "ورود کاربران از پنل دیگر", en: "Import users from another panel" },

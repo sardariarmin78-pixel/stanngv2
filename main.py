@@ -53,7 +53,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.4.0"
+APP_VERSION = "3.4.1"
 
 
 def _env_raw(name: str):
@@ -4096,24 +4096,30 @@ def _ver_tuple(v):
 
 
 async def _resolve_latest_release(repo: str, current: str, client: httpx.AsyncClient):
-    """Returns (latest_version, html_url, download_zip_url) via the GitHub API."""
-    latest, url, zip_url = current, f"https://github.com/{repo}/releases", None
+    """Returns (latest_version, html_url, download_zip_url) via the GitHub API.
+
+    latest is None when the repo has never published a release or tag. That is
+    a different thing from being up to date, and reporting it as "you have the
+    newest version" -- which is what returning `current` here used to do --
+    hides a misconfigured repo behind a reassuring green message.
+    """
+    url = f"https://github.com/{repo}/releases"
     r = await client.get(f"https://api.github.com/repos/{repo}/releases/latest")
     if r.status_code == 200:
         data = r.json()
         tag = (data.get("tag_name") or "").lstrip("v")
         if tag:
-            latest = tag
-            url = data.get("html_url", url)
-            zip_url = data.get("zipball_url")
-    else:
-        r2 = await client.get(f"https://api.github.com/repos/{repo}/tags")
-        if r2.status_code == 200 and r2.json():
-            tag_info = r2.json()[0]
-            latest = (tag_info.get("name") or current).lstrip("v")
-            url = f"https://github.com/{repo}/releases/tag/{tag_info.get('name')}"
-            zip_url = tag_info.get("zipball_url")
-    return latest, url, zip_url
+            return tag, data.get("html_url", url), data.get("zipball_url")
+
+    r2 = await client.get(f"https://api.github.com/repos/{repo}/tags")
+    if r2.status_code == 200 and r2.json():
+        tag_info = r2.json()[0]
+        name = tag_info.get("name") or ""
+        if name:
+            return (name.lstrip("v"),
+                    f"https://github.com/{repo}/releases/tag/{name}",
+                    tag_info.get("zipball_url"))
+    return None, url, None
 
 
 def _ota_repo(db) -> str:
@@ -4137,8 +4143,10 @@ async def api_ota_check(user: Identity = Depends(require_owner)):
         raise HTTPException(502, "github-unreachable")
 
     return {
-        "current": current, "latest": latest,
-        "update_available": _ver_tuple(latest) > _ver_tuple(current),
+        "current": current,
+        "latest": latest,
+        "no_releases": latest is None,
+        "update_available": bool(latest) and _ver_tuple(latest) > _ver_tuple(current),
         "url": url,
     }
 
@@ -4218,6 +4226,8 @@ async def api_ota_update(request: Request, user: Identity = Depends(require_owne
                 timeout=60, headers={"Accept": "application/vnd.github+json"}, follow_redirects=True
             ) as client:
                 latest, _html_url, zip_url = await _resolve_latest_release(repo, current, client)
+                if latest is None:
+                    raise HTTPException(400, "no-releases-published")
                 if _ver_tuple(latest) <= _ver_tuple(current):
                     return {"ok": False, "reason": "already-up-to-date",
                             "current": current, "latest": latest}
