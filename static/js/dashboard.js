@@ -77,6 +77,8 @@
     check('settingVoucherRedeem', !!s.voucher_redeem_enabled);
     check('settingNotifyCustomer', !!s.notify_customer_enabled);
     check('settingShopEnabled', !!s.shop_enabled);
+    check('settingReferralEnabled', !!s.referral_enabled);
+    set('settingReferralDays', s.referral_bonus_days != null ? s.referral_bonus_days : 7);
     set('settingShopInstructions', s.shop_instructions || '');
     check('settingTrialSelfserve', !!s.trial_selfserve_enabled);
     set('settingRenewOptions', (s.userbot_renew_options || [30, 60, 90]).join(','));
@@ -165,7 +167,7 @@
     if (name === 'sales') { loadSales(); loadVouchers(); }
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security' && isOwner) { loadTwofaStatus(); loadLoginLog(); }
-    if (name === 'settings') { loadBackupStatus(); loadCleanupStatus(); }
+    if (name === 'settings') { loadBackupStatus(); loadCleanupStatus(); loadDiagnostics(); }
     if (name === 'notifications') loadRenewRequests(false);
     if (name === 'notifications') loadUserbotStatus();
     closeSidebarMobile();
@@ -788,6 +790,58 @@
       PEYK.toast(e.detail || 'error', 'error');
     } finally { PEYK.setLoading(btn, false); }
   });
+
+
+  // ---------------- configuration self-check ----------------
+  /* Grouped by severity because the seller needs to know what is broken now
+     versus what is merely worth turning on. */
+  const DX_STYLE = {
+    error: { cls: 'pill-off', icon: '#icon-info' },
+    warn: { cls: 'pill-warn', icon: '#icon-info' },
+    info: { cls: 'pill-muted', icon: '#icon-info' },
+  };
+
+  async function loadDiagnostics() {
+    const btn = $('dxRefresh');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/diagnostics');
+      renderDiagnostics(r);
+    } catch (e) {
+      PEYK.toast(e.detail || 'error', 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  }
+
+  function renderDiagnostics(r) {
+    const list = $('dxList');
+    const summary = $('dxSummary');
+    list.innerHTML = '';
+    $('dxClean').style.display = r.issues.length ? 'none' : 'block';
+
+    summary.textContent = r.issues.length
+      ? PEYK.t('dx_summary').replace('{e}', r.errors).replace('{w}', r.warnings)
+      : PEYK.t('dx_all_good');
+    summary.className = 'pill ' + (r.errors ? 'pill-off' : r.warnings ? 'pill-warn' : 'pill-on');
+
+    const order = { error: 0, warn: 1, info: 2 };
+    const rows = [...r.issues].sort((a, b) => order[a.level] - order[b.level]);
+    const frag = document.createDocumentFragment();
+    rows.forEach(item => {
+      const style = DX_STYLE[item.level] || DX_STYLE.info;
+      const div = document.createElement('div');
+      div.className = 'setting-row';
+      div.innerHTML = `
+        <div>
+          <div class="title">${esc(PEYK.t('dx_' + item.code))}</div>
+          <div class="hint">${esc(PEYK.t('dx_' + item.code + '_fix'))}</div>
+        </div>
+        <span class="pill ${style.cls}">${esc(PEYK.t('dx_level_' + item.level))}</span>`;
+      frag.appendChild(div);
+    });
+    list.appendChild(frag);
+  }
+
+  $('dxRefresh').addEventListener('click', loadDiagnostics);
 
 
   // ---------------- import from another panel ----------------
@@ -2009,6 +2063,8 @@
       voucher_redeem_enabled: $('settingVoucherRedeem').checked,
       notify_customer_enabled: $('settingNotifyCustomer').checked,
       shop_enabled: $('settingShopEnabled').checked,
+      referral_enabled: $('settingReferralEnabled').checked,
+      referral_bonus_days: num('settingReferralDays'),
       shop_instructions: $('settingShopInstructions').value.trim(),
       trial_selfserve_enabled: $('settingTrialSelfserve').checked,
       userbot_renew_options: days,

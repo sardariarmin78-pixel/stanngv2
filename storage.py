@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 17  # v17: in-bot shop orders
+SCHEMA_VERSION = 18  # v18: referrals
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -281,6 +281,15 @@ def normalize_db(db: Dict[str, Any]) -> bool:
         if not isinstance(ib.get("ip_log"), dict):
             ib["ip_log"] = {}
             changed = True
+
+    if not isinstance(db.get("bot_username"), str):
+        db["bot_username"] = ""
+        changed = True
+
+    # Who invited whom, and whether the invite has already paid out.
+    if not isinstance(db.get("referrals"), dict):
+        db["referrals"] = {}
+        changed = True
 
     # Purchases waiting on the seller to look at a receipt.
     if not isinstance(db.get("orders"), dict):

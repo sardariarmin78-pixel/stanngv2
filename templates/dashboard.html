@@ -681,6 +681,18 @@
               </div>
               <div class="setting-row">
                 <div>
+                  <div class="title" data-i18n="rf_enable">دعوت دوستان (/invite)</div>
+                  <div class="hint" data-i18n="rf_enable_hint">هر مشتری یک لینک دعوت می‌گیرد. وقتی دعوت‌شده اولین خریدش را انجام داد، به هر دو هدیه اضافه می‌شود. اکانت تست هدیه نمی‌دهد.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingReferralEnabled"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label data-i18n="rf_days">هدیه‌ی هر طرف (روز)</label>
+                <input class="input" type="number" id="settingReferralDays" min="0" max="365" step="1" placeholder="7" style="direction:ltr;">
+                <div class="small muted mt-8" data-i18n="rf_days_hint">۰ یعنی خاموش. این تعداد روز به اشتراک دعوت‌کننده و دعوت‌شده، هر دو، اضافه می‌شود.</div>
+              </div>
+              <div class="setting-row">
+                <div>
                   <div class="title" data-i18n="nt_customer">یادآوری به خودِ مشتری</div>
                   <div class="hint" data-i18n="nt_customer_hint">همان هشدار حجم و انقضا، این بار به چت خود مشتری در ربات کاربران. فقط برای کسانی که خودشان اشتراکشان را به ربات وصل کرده‌اند.</div>
                 </div>
@@ -945,6 +957,24 @@
                 </div>
               </div>
               <button class="btn btn-primary btn-sm" id="saveTrialBtn"><span data-i18n="save">ذخیره</span></button>
+            </div>
+          </div>
+
+          <div class="col-12 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-check-circle"/></svg><span data-i18n="dx_title">بررسی سلامت پیکربندی</span></h3>
+              <div class="win-head-tools">
+                <span class="pill pill-muted" id="dxSummary">—</span>
+                <button class="btn btn-sm" id="dxRefresh"><svg><use href="#icon-refresh"/></svg><span data-i18n="dx_check">بررسی</span></button>
+              </div>
+            </div>
+            <div class="win-body">
+              <div class="small muted mb-12" data-i18n="dx_hint">تنظیماتی که خاموش‌اند دقیقاً شبیه تنظیماتی به نظر می‌رسند که درست کار می‌کنند — تا وقتی مشتری‌ات به مشکل بخورد. این صفحه همان‌ها را زودتر پیدا می‌کند.</div>
+              <div id="dxList"></div>
+              <div class="empty-state" id="dxClean" style="display:none; padding:24px;">
+                <div class="empty-art"><svg><use href="#icon-check-circle"/></svg></div>
+                <div class="title" data-i18n="dx_all_good">همه چیز مرتب است</div>
+              </div>
             </div>
           </div>
 
