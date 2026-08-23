@@ -397,3 +397,89 @@ def test_multiworker_defers_to_the_lock(tmp_path, monkeypatch):
         assert main._is_leader() is False
     finally:
         held.release()
+
+
+# ------------------------------------------------------------------ memory cap
+"""
+Sizing the pool by cores alone got a deploy OOM-killed.
+
+A platform can report eight cores while capping the container at 512MB. Eight
+copies of the app do not fit in that, the kernel kills them, and the only
+symptom is a healthcheck that never answers -- nothing in the log says
+"memory". Cores decide how many workers are useful; memory decides how many
+are survivable, and it wins.
+"""
+MB = 1024 * 1024
+
+
+def test_a_small_container_gets_fewer_workers_than_cores():
+    """The case that broke a deploy: plenty of reported cores, little RAM."""
+    assert cluster.resolve_workers("auto", cpu_count=8, memory_limit=512 * MB) == 3
+
+
+def test_a_tiny_container_still_gets_one():
+    """Below one worker's budget the answer is one, never zero."""
+    assert cluster.resolve_workers("auto", cpu_count=8, memory_limit=64 * MB) == 1
+
+
+def test_memory_does_not_inflate_the_count():
+    """A roomy container is still limited by its cores."""
+    assert cluster.resolve_workers("auto", cpu_count=2, memory_limit=8192 * MB) == 2
+
+
+def test_no_limit_behaves_as_before():
+    assert cluster.resolve_workers("auto", cpu_count=4, memory_limit=None) == 4
+
+
+def test_an_explicit_setting_is_clamped_too():
+    """Asking for sixteen workers in a small container is a request for
+    throughput, not for a crash loop."""
+    assert cluster.resolve_workers("16", cpu_count=8, memory_limit=512 * MB) == 3
+
+
+def test_an_explicit_setting_is_untouched_when_memory_allows():
+    assert cluster.resolve_workers("6", cpu_count=8, memory_limit=8192 * MB) == 6
+
+
+def test_the_cap_arithmetic():
+    assert cluster.memory_worker_cap(512 * MB) == 3      # 384MB usable
+    assert cluster.memory_worker_cap(1024 * MB) == 7     # 896MB usable
+    assert cluster.memory_worker_cap(200 * MB) == 1      # below one budget
+    assert cluster.memory_worker_cap(None) is None
+    assert cluster.memory_worker_cap(0) is None
+
+
+def test_cgroup_v2_limit_is_read(tmp_path, monkeypatch):
+    f = tmp_path / "memory.max"
+    f.write_text("536870912\n")
+    monkeypatch.setattr(cluster, "_read_first",
+                        lambda p: f.read_text() if "memory.max" in p else None)
+    assert cluster.cgroup_memory_limit() == 536870912
+
+
+def test_cgroup_v2_max_means_unrestricted(tmp_path, monkeypatch):
+    monkeypatch.setattr(cluster, "_read_first",
+                        lambda p: "max\n" if "memory.max" in p else None)
+    assert cluster.cgroup_memory_limit() is None
+
+
+def test_cgroup_v1_sentinel_is_not_a_real_limit(monkeypatch):
+    """v1 reports a number near 2**63 when unrestricted; taking it literally
+    would compute a cap of billions."""
+    huge = str(1 << 63)
+    monkeypatch.setattr(
+        cluster, "_read_first",
+        lambda p: huge if "limit_in_bytes" in p else None)
+    assert cluster.cgroup_memory_limit() is None
+
+
+def test_cgroup_v1_real_limit_is_read(monkeypatch):
+    monkeypatch.setattr(
+        cluster, "_read_first",
+        lambda p: "268435456" if "limit_in_bytes" in p else None)
+    assert cluster.cgroup_memory_limit() == 268435456
+
+
+def test_garbage_in_the_cgroup_file_is_ignored(monkeypatch):
+    monkeypatch.setattr(cluster, "_read_first", lambda p: "not-a-number")
+    assert cluster.cgroup_memory_limit() is None

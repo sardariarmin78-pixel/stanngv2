@@ -320,7 +320,65 @@ def available_cpus() -> float:
     return max(0.1, min(candidates))
 
 
-def resolve_workers(setting, cpu_count=None) -> int:
+def cgroup_memory_limit():
+    """The container's memory allowance in bytes, or None when unrestricted.
+
+    The sibling of cgroup_cpu_quota, and the same trap: a platform can hand
+    the container eight reported cores while capping it at half a gigabyte.
+    Sizing the worker pool on cores alone then starts eight copies of the app
+    in a container that fits three, the kernel kills them, and the deploy
+    fails its healthcheck with nothing in the log explaining why.
+    """
+    # cgroup v2. "max" means unrestricted.
+    v2 = _read_first("/sys/fs/cgroup/memory.max")
+    if v2:
+        if v2.strip() == "max":
+            return None
+        try:
+            value = int(v2)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+
+    # cgroup v1 reports a sentinel close to 2**63 when unrestricted.
+    v1 = _read_first("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    if v1:
+        try:
+            value = int(v1)
+            if 0 < value < (1 << 62):
+                return value
+        except ValueError:
+            pass
+    return None
+
+
+# Resident size of one worker with FastAPI, Pillow and psutil loaded, rounded
+# up. Under-estimating is what gets the pool OOM-killed.
+WORKER_MEMORY_BUDGET = 120 * 1024 * 1024
+# Held back for the supervising process, the page cache and whatever the
+# platform runs alongside. Spending the entire allowance on workers leaves a
+# container that boots and then dies under its first real load.
+MEMORY_HEADROOM = 128 * 1024 * 1024
+
+
+def memory_worker_cap(limit=None) -> Optional[int]:
+    """How many workers the memory allowance leaves room for.
+
+    Deliberately pessimistic. One worker fewer costs a little throughput; one
+    worker too many costs the whole container, and the symptom is a
+    healthcheck timeout that names no cause.
+    """
+    limit = limit if limit is not None else cgroup_memory_limit()
+    if not limit:
+        return None
+    usable = limit - MEMORY_HEADROOM
+    if usable < WORKER_MEMORY_BUDGET:
+        return 1
+    return max(1, int(usable // WORKER_MEMORY_BUDGET))
+
+
+def resolve_workers(setting, cpu_count=None, memory_limit=None) -> int:
     """Translate the WORKERS setting into a process count.
 
     "auto" spreads the relay over the cores the container actually has, capped
@@ -329,14 +387,21 @@ def resolve_workers(setting, cpu_count=None) -> int:
     only add memory and startup time with no throughput to gain.
     """
     cores = float(cpu_count) if cpu_count is not None else available_cpus()
+    mem_cap = memory_worker_cap(memory_limit)
 
     if setting in (None, "", "auto"):
         if cores < 2:
             return 1
-        return max(1, min(8, int(cores)))
+        n = max(1, min(8, int(cores)))
+        # Memory is a hard ceiling, not a preference: exceeding it does not
+        # make the panel slow, it makes the container die.
+        return min(n, mem_cap) if mem_cap else n
 
     try:
         n = int(setting)
     except (TypeError, ValueError):
         return 1
-    return max(1, min(32, n))
+    n = max(1, min(32, n))
+    # An explicit setting is still clamped. Someone asking for 16 workers in a
+    # 512MB container wants throughput, not a crash loop.
+    return min(n, mem_cap) if mem_cap else n

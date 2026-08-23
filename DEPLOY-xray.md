@@ -22,7 +22,7 @@ request goes through the Python relay.
 1. Edit `railway.json` and replace the `build` block with:
 
    ```json
-   "build": { "builder": "DOCKERFILE", "dockerfilePath": "Dockerfile" }
+   "build": { "builder": "DOCKERFILE", "dockerfilePath": "deploy/xray/Dockerfile" }
    ```
 
    and delete the `startCommand` line — the image has its own entrypoint.
@@ -32,6 +32,13 @@ request goes through the Python relay.
 
 3. Check **Settings → xray** in the panel. It reports the detected version, or
    says it fell back to the Python relay.
+
+## Why these files live in `deploy/xray/`
+
+Railway detects a `Dockerfile` in the repository root and builds with it
+**even when `railway.json` asks for Nixpacks**. Keeping them in a
+subdirectory means the default deployment cannot be hijacked by their mere
+presence; you opt in by naming the path explicitly, as above.
 
 ## Before you switch
 

@@ -55,7 +55,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.8.0"
+APP_VERSION = "3.8.1"
 
 
 def _env_raw(name: str):
