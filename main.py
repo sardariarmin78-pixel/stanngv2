@@ -42,6 +42,7 @@ import fragments
 import notify
 import subscription
 import totp
+import migrate
 import userbot
 from colo_map import describe_colo
 from storage import (
@@ -52,7 +53,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.3.0"
 
 
 def _env_raw(name: str):
@@ -2743,6 +2744,92 @@ async def api_sales(request: Request, user: Identity = Depends(require_auth)):
         "by_plan": sorted(by_plan.values(), key=lambda b: -b["total"]),
         "recent": sorted(rows, key=lambda s: -s.get("at", 0))[:50],
     }
+
+
+# ------------------------------------------------------------------ migration
+@app.post("/api/import/preview")
+async def api_import_preview(request: Request, user: Identity = Depends(require_auth)):
+    """Say what would happen, change nothing.
+
+    A migration is the one operation where the admin cannot undo a mistake by
+    hand -- a thousand wrong rows is not something anyone cleans up -- so the
+    preview is a separate call rather than a flag.
+    """
+    payload = await _json_body(request)
+    try:
+        source, rows = migrate.detect_and_parse(payload.get("data"))
+    except migrate.ImportError_ as e:
+        raise HTTPException(400, e.reason)
+
+    db = await store.get()
+    plan = migrate.plan_import(rows, {ib.get("name") for ib in visible_inbounds(db, user)})
+    if not user.is_owner:
+        quota = reseller_quota(user)
+        usage = reseller_usage(db, user)
+        room = (quota["max_users"] - usage["users"]) if quota["max_users"] else None
+        if room is not None and plan["importable"] > room:
+            plan["over_quota"] = plan["importable"] - room
+    return {
+        "source": source,
+        "total": plan["total"],
+        "importable": plan["importable"],
+        "lapsed": plan["lapsed"],
+        "skipped": plan["skipped"][:50],
+        "over_quota": plan.get("over_quota", 0),
+        "sample": [{"name": r["name"], "quota_gb": r["quota_gb"],
+                    "expire_at": r["expire_at"], "enabled": r["enabled"],
+                    "lapsed": r.get("lapsed")} for r in plan["rows"][:20]],
+    }
+
+
+@app.post("/api/import")
+async def api_import(request: Request, user: Identity = Depends(require_auth)):
+    payload = await _json_body(request)
+    try:
+        source, rows = migrate.detect_and_parse(payload.get("data"))
+    except migrate.ImportError_ as e:
+        raise HTTPException(400, e.reason)
+
+    db = await store.get()
+    plan = migrate.plan_import(rows, {ib.get("name") for ib in visible_inbounds(db, user)})
+    if not plan["rows"]:
+        raise HTTPException(400, "nothing-to-import")
+    assert_can_create(db, user, len(plan["rows"]))
+
+    settings = db.get("settings") or {}
+    now = time.time()
+    created = []
+    for row in plan["rows"]:
+        expire_at = row["expire_at"]
+        created.append({
+            "uid": gen_uid(),
+            "uuid": gen_uuid(),
+            "sub_token": gen_uid(),
+            "ip_log": {},
+            "owner": None if user.is_owner else user.id,
+            "name": row["name"],
+            "enabled": row["enabled"],
+            "created_at": now,
+            "expire_at": expire_at,
+            "expire_days": int((expire_at - now) // 86400) if expire_at else 0,
+            "quota_gb": row["quota_gb"],
+            "max_connections": row["max_connections"],
+            "max_requests": 0,
+            "used_up": row["used_up"],
+            "used_down": row["used_down"],
+            "request_count": 0,
+            "strict_single_ip": False,
+            "note": row["note"] or f"imported from {source}",
+            "fp": settings.get("default_fingerprint", "chrome"),
+            "history": [],
+        })
+
+    def _apply(db):
+        db["inbounds"].extend(created)
+
+    await store.mutate(_apply)
+    return {"ok": True, "source": source, "imported": len(created),
+            "skipped": len(plan["skipped"]), "lapsed": plan["lapsed"]}
 
 
 # ------------------------------------------------------------------ vouchers
