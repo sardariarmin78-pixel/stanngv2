@@ -269,7 +269,14 @@
     PEYK.setLoading(btn, true);
     try {
       const r = await PEYK.api('/api/ota/check');
-      if (r.update_available) {
+      if (r.no_releases) {
+        // Distinct from being current: the repo has never cut a release, so
+        // there is nothing to compare against and nothing to install.
+        el.innerHTML = `<span style="color:var(--warn)">${esc(PEYK.t('ota_no_releases'))}</span>`;
+        otaLatest = null;
+        $('otaUpdateBtn').style.display = 'none';
+        $('otaUpdateHint').style.display = 'none';
+      } else if (r.update_available) {
         el.innerHTML = `<span style="color:var(--accent)">${esc(PEYK.t('dash_ota_available'))} <b>${esc(r.latest)}</b></span> — <a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--info); text-decoration:underline;">GitHub</a>`;
         otaLatest = r.latest;
         $('otaUpdateBtn').style.display = '';
