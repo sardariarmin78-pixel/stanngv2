@@ -53,7 +53,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.6.0"
+APP_VERSION = "3.7.0"
 
 
 def _env_raw(name: str):
@@ -1033,10 +1033,14 @@ class _BotContext:
         self._pending_requests = {}
         self._pending_orders = {}
         self._pending_selection = {}
+        self._pending_referrals = {}
         settings = db.get("settings") or {}
         self.renew_enabled = bool(settings.get("userbot_renew_enabled"))
         self.voucher_enabled = bool(settings.get("voucher_redeem_enabled"))
         self.shop_enabled = bool(settings.get("shop_enabled"))
+        self.referral_enabled = _referral_settings(db)["enabled"]
+        # Cached at boot; the invite deep link needs the bot's @name.
+        self.bot_username = (db.get("bot_username") or "").lstrip("@")
         self.trial_enabled = bool(settings.get("trial_selfserve_enabled")
                                   and settings.get("trial_enabled", True))
 
@@ -1058,6 +1062,33 @@ class _BotContext:
             return "", []
         configs = build_configs_for_origin(self.db, ib, self.origin)
         return f"{self.origin}/sub/{sub_token_of(ib)}", configs
+
+    # ---------------- referrals ----------------
+    def note_referral(self, chat, code: str) -> bool:
+        """Queued rather than written: the update loop owns the mutation."""
+        conf = _referral_settings(self.db)
+        if not conf["enabled"]:
+            return False
+        if not inbound_by_referral(self.db, code):
+            return False
+        if (self.db.get("bot_bindings") or {}).get(str(chat)):
+            return False
+        if str(chat) in (self.db.get("referrals") or {}):
+            return False
+        self._pending_referrals[str(chat)] = code
+        return True
+
+    def invite_info(self, uid: str) -> Optional[dict]:
+        ib = inbound_by_uid(self.db, uid)
+        if not ib:
+            return None
+        code = referral_code_of(ib)
+        link = f"https://t.me/{self.bot_username}?start={code}" if self.bot_username else ""
+        return {"code": code, "link": link, "days": _referral_settings(self.db)["days"]}
+
+    @property
+    def pending_referrals(self):
+        return self._pending_referrals
 
     # ---------------- shop ----------------
     def shop_plans(self) -> list:
@@ -1262,6 +1293,8 @@ async def _userbot_loop():
                         }
                         req["request_id"] = rid
                     userbot.prune_requests(store_reqs)
+                for chat_key, code in ctx.pending_referrals.items():
+                    record_referral(db, chat_key, code)
                 if ctx.pending_selection:
                     sel = db.setdefault("shop_selections", {})
                     sel.update(ctx.pending_selection)
@@ -1280,7 +1313,7 @@ async def _userbot_loop():
             await store.mutate(
                 _apply,
                 persist=bool(ctx.pending_binds or new_requests or new_orders
-                             or ctx.pending_selection))
+                             or ctx.pending_selection or ctx.pending_referrals))
 
             for req in new_requests.values():
                 await _dispatch_renew_request(req)
@@ -1437,6 +1470,105 @@ async def _dispatch_renew_request(req: dict):
             entry["admin_message_id"] = message_id
 
     await store.mutate(_apply, persist=False)
+
+
+# ------------------------------------------------------------------ referrals
+MAX_REFERRALS = 20_000
+REFERRAL_PREFIX = "ref_"
+
+
+def referral_code_of(ib: dict) -> str:
+    """Derived from the uid, not the subscription token.
+
+    The token rotates when a link leaks, and an invite code that changed every
+    time someone rotated their link would break every share they had made.
+    """
+    return f"{REFERRAL_PREFIX}{ib.get('uid', '')[:12]}"
+
+
+def inbound_by_referral(db, code: str) -> Optional[dict]:
+    if not code or not code.startswith(REFERRAL_PREFIX):
+        return None
+    stem = code[len(REFERRAL_PREFIX):]
+    if not stem:
+        return None
+    for ib in db.get("inbounds", []):
+        if ib.get("uid", "")[:12] == stem:
+            return ib
+    return None
+
+
+def _referral_settings(db) -> dict:
+    settings = db.get("settings") or {}
+    try:
+        days = max(0, min(365, int(settings.get("referral_bonus_days", 7))))
+    except (TypeError, ValueError):
+        days = 7
+    return {"enabled": bool(settings.get("referral_enabled")), "days": days}
+
+
+def record_referral(db, chat, code: str) -> bool:
+    """Remember who invited this chat. True if it stuck.
+
+    Only recorded, never paid: the bonus lands when they actually buy, so an
+    invite link cannot be farmed by opening it repeatedly.
+    """
+    conf = _referral_settings(db)
+    if not conf["enabled"] or not conf["days"]:
+        return False
+    chat = str(chat)
+    referrer = inbound_by_referral(db, code)
+    if not referrer:
+        return False
+    # Already have a subscription, or already invited: neither can be redone.
+    if (db.get("bot_bindings") or {}).get(chat):
+        return False
+    if chat in (db.get("referrals") or {}):
+        return False
+
+    refs = db.setdefault("referrals", {})
+    refs[chat] = {"referrer_uid": referrer["uid"], "at": time.time(), "paid": False}
+    if len(refs) > MAX_REFERRALS:
+        for key in sorted(refs, key=lambda k: refs[k].get("at", 0))[: len(refs) // 4]:
+            refs.pop(key, None)
+    return True
+
+
+def _extend(ib: dict, days: int, now: Optional[float] = None):
+    now = now if now is not None else time.time()
+    base = max(now, ib.get("expire_at") or 0)
+    ib["expire_at"] = base + days * 86400
+    ib["expire_days"] = int((ib["expire_at"] - ib.get("created_at", now)) // 86400)
+
+
+def settle_referral(db, chat, new_ib: dict) -> Optional[dict]:
+    """Pay both sides once the invited customer has actually bought something.
+
+    Called from inside a mutation, so it edits in place and returns what
+    happened for the caller to announce.
+    """
+    conf = _referral_settings(db)
+    if not conf["enabled"] or not conf["days"]:
+        return None
+    chat = str(chat)
+    entry = (db.get("referrals") or {}).get(chat)
+    if not entry or entry.get("paid"):
+        return None
+
+    referrer = inbound_by_uid(db, entry.get("referrer_uid"))
+    # The inviter may have been deleted since; the invitee still gets theirs.
+    if referrer and referrer["uid"] == new_ib["uid"]:
+        return None       # self-referral
+
+    days = conf["days"]
+    _extend(new_ib, days)
+    if referrer:
+        _extend(referrer, days)
+    entry["paid"] = True
+    entry["paid_at"] = time.time()
+    return {"days": days,
+            "referrer_uid": referrer["uid"] if referrer else None,
+            "referrer_name": referrer.get("name") if referrer else None}
 
 
 MAX_ORDERS = 500
@@ -1649,6 +1781,9 @@ async def _handle_order_callback(callback: dict):
             db.setdefault("bot_bindings", {})[str(customer_chat)] = ib["uid"]
             (db.get("shop_selections") or {}).pop(str(customer_chat), None)
             _record_sale(db, ib, plan, None, "shop")
+            bonus = settle_referral(db, customer_chat, ib)
+            if bonus:
+                created["_referral"] = bonus
             created.update(ib)
 
         try:
@@ -2292,6 +2427,7 @@ BOOL_SETTINGS = {
     "userbot_renew_enabled", "health_check_enabled", "health_auto_disable",
     "sharing_detect_enabled", "sharing_auto_disable", "voucher_redeem_enabled",
     "trial_selfserve_enabled", "notify_customer_enabled", "shop_enabled",
+    "referral_enabled",
 }
 TEXT_SETTINGS = {
     "public_domain": 200, "ota_repo": 140, "sni_override": 253,
@@ -2315,6 +2451,7 @@ INT_SETTINGS = {
     "health_fail_threshold": (1, 20),
     "sharing_window_hours": (1, 168),
     "sharing_threshold": (2, 50),
+    "referral_bonus_days": (0, 365),
 }
 OTA_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$")
 
@@ -3346,6 +3483,96 @@ async def api_import(request: Request, user: Identity = Depends(require_auth)):
             "skipped": len(plan["skipped"]), "lapsed": plan["lapsed"]}
 
 
+# ------------------------------------------------------------------ diagnostics
+def _check(level: str, code: str, ok: bool = False) -> dict:
+    return {"level": level, "code": code, "ok": ok}
+
+
+def run_diagnostics(db) -> list:
+    """Everything that is silently misconfigured, in one list.
+
+    Written after shipping a bug where the panel reported "you have the latest
+    version" to someone whose repository had never published one. The class of
+    problem is the same throughout: a setting that is merely absent looks
+    identical to one that is fine, until a customer is affected.
+
+    Pure and synchronous so the rules are testable without a live panel.
+    """
+    settings = db.get("settings") or {}
+    out = []
+
+    def add(level, code, ok):
+        out.append(_check(level, code, ok))
+
+    # --- things that break the product outright -------------------------
+    domain = (settings.get("public_domain") or "").strip()
+    add("error", "no-public-domain", bool(domain))
+
+    plans = db.get("plans") or []
+    inbounds = db.get("inbounds") or []
+
+    # --- things that lose data or money ---------------------------------
+    token, chat = _backup_credentials(db)
+    add("error", "no-backup", bool(token and chat))
+    add("warn", "backup-not-automatic",
+        bool(settings.get("auto_backup_enabled")) or not (token and chat))
+
+    # --- selling ---------------------------------------------------------
+    priced = [p for p in plans if int(p.get("price") or 0) > 0]
+    if settings.get("shop_enabled"):
+        add("error", "shop-without-plans", bool(priced))
+        add("error", "shop-without-instructions",
+            bool((settings.get("shop_instructions") or "").strip()))
+    if settings.get("voucher_redeem_enabled") or settings.get("shop_enabled"):
+        add("warn", "no-priced-plan", bool(priced))
+
+    # --- the bots ---------------------------------------------------------
+    userbot_on = bool(settings.get("userbot_enabled"))
+    userbot_token = (settings.get("userbot_token") or "").strip()
+    if userbot_on:
+        add("error", "userbot-without-token", bool(userbot_token))
+        add("warn", "userbot-without-domain", bool(domain))
+    needs_bot = any(settings.get(k) for k in
+                    ("shop_enabled", "voucher_redeem_enabled",
+                     "trial_selfserve_enabled", "notify_customer_enabled",
+                     "referral_enabled"))
+    add("error", "bot-features-without-bot", not needs_bot or bool(userbot_on and userbot_token))
+    if settings.get("referral_enabled"):
+        add("warn", "referral-without-username", bool((db.get("bot_username") or "").strip()))
+
+    # --- updates ----------------------------------------------------------
+    add("warn", "no-ota-repo", bool((settings.get("ota_repo") or "").strip()))
+
+    # --- resilience -------------------------------------------------------
+    endpoints = [e for e in (db.get("endpoints") or []) if e.get("enabled", True)]
+    add("warn", "single-entry-point", len(endpoints) >= 1)
+    add("info", "no-health-checks",
+        bool(settings.get("health_check_enabled")) or len(endpoints) < 1)
+
+    # --- account safety ----------------------------------------------------
+    twofa = db.get("twofa") or {}
+    add("warn", "no-2fa", bool(twofa.get("enabled") and twofa.get("secret")))
+    add("info", "sharing-detection-off", bool(settings.get("sharing_detect_enabled")))
+
+    # --- housekeeping ------------------------------------------------------
+    add("info", "no-plans", bool(plans))
+    add("info", "cleanup-off", bool(settings.get("cleanup_enabled")) or not inbounds)
+
+    return [c for c in out if not c["ok"]]
+
+
+@app.get("/api/diagnostics")
+async def api_diagnostics(user: Identity = Depends(require_owner)):
+    db = await store.get()
+    issues = run_diagnostics(db)
+    return {
+        "issues": issues,
+        "errors": sum(1 for i in issues if i["level"] == "error"),
+        "warnings": sum(1 for i in issues if i["level"] == "warn"),
+        "notes": sum(1 for i in issues if i["level"] == "info"),
+    }
+
+
 # ------------------------------------------------------------------ vouchers
 MAX_VOUCHERS = 5_000
 VOUCHER_BATCH_MAX = 200
@@ -3531,6 +3758,10 @@ async def redeem_voucher(raw_code: str, chat_id=None) -> dict:
         if chat_id is not None:
             v["used_chat"] = chat_id
         _record_sale(db, ib, plan, v.get("owner"), "voucher")
+        if chat_id is not None:
+            bonus = settle_referral(db, chat_id, ib)
+            if bonus:
+                result["_referral"] = bonus
         result.update(ib)
 
     await store.mutate(_apply)
@@ -4425,6 +4656,13 @@ async def api_userbot_test(user: Identity = Depends(require_owner)):
         me = await userbot.get_me(token)
     except userbot.UserBotError as e:
         raise HTTPException(502, f"telegram: {e}")
+    # Cached because the invite deep link needs the bot's @name, and there is
+    # no other moment where the panel reliably learns it.
+    username = (me.get("username") or "").lstrip("@")
+    if username and db.get("bot_username") != username:
+        def _apply(db):
+            db["bot_username"] = username
+        await store.mutate(_apply)
     return {"ok": True, "username": me.get("username"), "name": me.get("first_name")}
 
 

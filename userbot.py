@@ -144,6 +144,7 @@ HELP = (
     "/bind &lt;کد&gt; — اتصال اشتراک شما به این چت\n"
     "/redeem &lt;کد-شارژ&gt; — فعال‌سازی اشتراک با کد خرید\n"
     "/buy — خرید اشتراک\n"
+    "/invite — دعوت دوستان و گرفتن هدیه\n"
     "/trial — دریافت اکانت تست رایگان\n"
     "/status — حجم و اعتبار باقی‌مانده\n"
     "/config — لینک اشتراک و کانفیگ\n"
@@ -334,10 +335,34 @@ async def handle_message(message: dict, ctx) -> Optional[str]:
 
     if cmd in ("start", "help"):
         bound = ctx.bound_uid(chat)
+        # Telegram passes a deep link's payload as the argument to /start, so
+        # an invited customer arrives already carrying their referrer's code.
+        invited = False
+        if cmd == "start" and arg.startswith("ref_"):
+            invited = ctx.note_referral(chat, arg.strip())
         if cmd == "start" and not bound:
-            return ("👋 خوش آمدید.\n\nبرای شروع، کد اشتراک خود را بفرستید:\n"
+            welcome = "👋 خوش آمدید.\n\n"
+            if invited:
+                welcome += ("🎁 با لینک دعوت وارد شدید — بعد از اولین خرید، "
+                            "هدیه‌ی شما و دعوت‌کننده‌تان اضافه می‌شود.\n\n")
+            return (welcome + "برای شروع، کد اشتراک خود را بفرستید:\n"
                     "<code>/bind کد-اشتراک</code>\n\n" + HELP)
         return HELP
+
+    if cmd == "invite":
+        if not getattr(ctx, "referral_enabled", False):
+            return "دعوت دوستان در این ربات فعال نیست."
+        uid = ctx.bound_uid(chat)
+        if not uid:
+            return "اول اشتراک خود را وصل کنید:\n<code>/bind کد-اشتراک</code>"
+        info = ctx.invite_info(uid)
+        if not info:
+            return "❌ این اشتراک دیگر وجود ندارد."
+        link = info.get("link") or info.get("code")
+        return (f"🎁 <b>دعوت دوستان</b>\n\n"
+                f"این لینک را برای دوستانتان بفرستید:\n<code>{_escape(link)}</code>\n\n"
+                f"وقتی از طریق آن اولین خریدشان را انجام دهند، "
+                f"<b>{info['days']}</b> روز به اشتراک هر دوی شما اضافه می‌شود.")
 
     if cmd == "bind":
         uid = arg.strip()
