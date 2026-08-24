@@ -286,6 +286,31 @@ def _renew_tail(can_renew: bool) -> str:
     return "\n\nبرای تمدید با پشتیبانی در تماس باشید."
 
 
+def format_broadcast(panel: str, body: str) -> str:
+    """A seller's own words, marked as coming from the panel.
+
+    The header matters: an unheralded message from a bot the customer bound
+    weeks ago reads like spam, and the next one gets muted.
+    """
+    return f"📢 <b>{_escape(panel)}</b>\n\n{_escape(body)}"
+
+
+def format_route_changed(panel: str, name: str, can_renew: bool) -> str:
+    """Sent when a location the customer might be on has gone dark.
+
+    Deliberately does not say "your connection is broken" -- most customers
+    have several routes in one subscription and will not have noticed a thing.
+    It says what to do, once, and stays quiet after that.
+    """
+    return (
+        f"🔄 <b>{_escape(panel)}</b>\n\n"
+        f"یکی از مسیرهای سرویس از دسترس خارج شد و مسیرهای دیگر جایگزینش شدند.\n\n"
+        f"اگر اتصالت کند شده یا وصل نمی‌شود، کافی است <b>لینک اشتراکت را در کلاینت "
+        f"یک بار به‌روزرسانی کنی</b> (گزینه‌ی Update در v2rayNG و مشابهش).\n\n"
+        f"اشتراک <b>{_escape(name)}</b> فعال است و حجم و اعتبارت دست‌نخورده باقی مانده."
+    )
+
+
 def format_customer_quota(panel: str, name: str, used: int, quota: int,
                           percent: float, can_renew: bool) -> str:
     """Addressed to the customer, not about them.
