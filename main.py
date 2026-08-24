@@ -55,7 +55,7 @@ from storage import (
 from vless_engine import relay
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "3.9.0"
+APP_VERSION = "3.10.0"
 
 
 def _env_raw(name: str):
@@ -2145,6 +2145,9 @@ async def _health_loop():
                 continue
 
             transitions = await _run_health_checks()
+            down = [name for state, name, _probe in transitions if state == "down"]
+            if down:
+                await _announce_route_change(down)
             if not transitions:
                 continue
             db = await store.get()
@@ -2607,6 +2610,7 @@ BOOL_SETTINGS = {
     "userbot_renew_enabled", "health_check_enabled", "health_auto_disable",
     "sharing_detect_enabled", "sharing_auto_disable", "voucher_redeem_enabled",
     "trial_selfserve_enabled", "notify_customer_enabled", "shop_enabled",
+    "broadcast_route_changes",
     "referral_enabled",
 }
 TEXT_SETTINGS = {
@@ -3770,6 +3774,156 @@ async def api_diagnostics(user: Identity = Depends(require_owner)):
         "warnings": sum(1 for i in issues if i["level"] == "warn"),
         "notes": sum(1 for i in issues if i["level"] == "info"),
     }
+
+
+# ------------------------------------------------------------------ broadcast
+MAX_BROADCAST_CHARS = 3000
+BROADCAST_PAUSE = 0.05      # Telegram tolerates ~30 messages a second
+
+
+def broadcast_audience(db, identity=None) -> list:
+    """(chat, uid) for every customer who can be reached.
+
+    Only people who bound their own subscription to the bot, so a broadcast
+    can never reach someone who never opted in. A reseller reaches only its
+    own customers.
+    """
+    bindings = db.get("bot_bindings") or {}
+    if not bindings:
+        return []
+    allowed = None
+    if identity is not None and not identity.is_owner:
+        allowed = {ib["uid"] for ib in visible_inbounds(db, identity)}
+
+    seen, out = set(), []
+    for chat, uid in bindings.items():
+        if uid in seen:
+            continue
+        if allowed is not None and uid not in allowed:
+            continue
+        # A binding pointing at a deleted subscription is dead weight.
+        if not inbound_by_uid(db, uid):
+            continue
+        seen.add(uid)
+        out.append((chat, uid))
+    return out
+
+
+async def _send_broadcast(db, text: str, audience: list) -> dict:
+    """Deliver to everyone, counting rather than stopping on refusals.
+
+    Someone who blocked the bot must not prevent the other two hundred from
+    hearing that their route changed.
+    """
+    token = ((db.get("settings") or {}).get("userbot_token") or "").strip()
+    if not token:
+        raise HTTPException(400, "not-configured")
+
+    sent = failed = 0
+    for chat, _uid in audience:
+        try:
+            await userbot.send(token, chat, text)
+            sent += 1
+        except userbot.UserBotError:
+            failed += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(BROADCAST_PAUSE)
+    return {"sent": sent, "failed": failed}
+
+
+@app.get("/api/broadcast")
+async def api_broadcast_audience(user: Identity = Depends(require_auth)):
+    """How many people a broadcast would actually reach."""
+    db = await store.get()
+    settings = db.get("settings") or {}
+    return {
+        "audience": len(broadcast_audience(db, user)),
+        "customers": len(visible_inbounds(db, user)),
+        "bot_ready": bool(settings.get("userbot_enabled")
+                          and settings.get("userbot_token")),
+        "last": (db.get("broadcast_log") or [])[-5:][::-1],
+    }
+
+
+@app.post("/api/broadcast")
+async def api_broadcast(request: Request, user: Identity = Depends(require_auth)):
+    payload = await _json_body(request)
+    body = str(payload.get("text") or "").strip()
+    if not body:
+        raise HTTPException(400, "empty-message")
+    if len(body) > MAX_BROADCAST_CHARS:
+        raise HTTPException(400, "message-too-long")
+
+    db = await store.get()
+    audience = broadcast_audience(db, user)
+    if not audience:
+        raise HTTPException(400, "no-audience")
+
+    text = userbot.format_broadcast(brand(db)["panel_name"], body)
+    result = await _send_broadcast(db, text, audience)
+
+    def _apply(db):
+        log = db.setdefault("broadcast_log", [])
+        log.append({
+            "at": time.time(),
+            "by": None if user.is_owner else user.id,
+            "preview": body[:120],
+            "sent": result["sent"],
+            "failed": result["failed"],
+        })
+        del log[:-50]
+
+    await store.mutate(_apply)
+    return {"ok": True, **result, "audience": len(audience)}
+
+
+async def _announce_route_change(names: list):
+    """Tell customers a location died, so they refetch their subscription.
+
+    The panel already knows this the moment a health check trips; until now it
+    told the owner and nobody else, leaving customers to work out for
+    themselves why one route had gone quiet.
+    """
+    db = await store.get()
+    settings = db.get("settings") or {}
+    if not settings.get("broadcast_route_changes"):
+        return
+    if not (settings.get("userbot_enabled") and settings.get("userbot_token")):
+        return
+
+    audience = broadcast_audience(db)
+    if not audience:
+        return
+
+    panel = brand(db)["panel_name"]
+    can_renew = bool(settings.get("userbot_renew_enabled"))
+    token = (settings.get("userbot_token") or "").strip()
+    by_uid = {ib["uid"]: ib for ib in db.get("inbounds", [])}
+
+    sent = 0
+    for chat, uid in audience:
+        ib = by_uid.get(uid)
+        if not ib or not inbound_status(ib)["live_enabled"]:
+            # No point telling an expired customer to refresh their link.
+            continue
+        text = userbot.format_route_changed(panel, ib.get("name", ""), can_renew)
+        try:
+            await userbot.send(token, chat, text)
+            sent += 1
+        except Exception:
+            pass
+        await asyncio.sleep(BROADCAST_PAUSE)
+
+    if sent:
+        def _apply(db):
+            log = db.setdefault("broadcast_log", [])
+            log.append({"at": time.time(), "by": None, "auto": True,
+                        "preview": "; ".join(names)[:120],
+                        "sent": sent, "failed": 0})
+            del log[:-50]
+
+        await store.mutate(_apply)
 
 
 # ------------------------------------------------------------------ vouchers

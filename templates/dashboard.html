@@ -608,6 +608,28 @@
       <!-- ============ NOTIFICATIONS ============ -->
       <section class="view" id="view-notifications">
         <div class="grid">
+          <div class="col-12 win">
+            <div class="win-head">
+              <h3><svg><use href="#icon-bell"/></svg><span data-i18n="bc_title">پیام همگانی به مشتری‌ها</span></h3>
+              <span class="pill pill-muted" id="bcAudience">0</span>
+            </div>
+            <div class="win-body flex-col gap-12">
+              <div class="small muted" data-i18n="bc_hint">به همه‌ی مشتری‌هایی می‌رود که خودشان اشتراکشان را به ربات وصل کرده‌اند. کسی که وصل نکرده پیامی نمی‌گیرد.</div>
+              <textarea class="input" id="bcText" rows="4" maxlength="3000" data-i18n-placeholder="bc_placeholder" placeholder="مثلاً: سرور جدید اضافه شد، لینک اشتراکتان را یک بار به‌روزرسانی کنید."></textarea>
+              <div class="flex items-center gap-12 flex-wrap">
+                <button class="btn btn-primary btn-sm" id="bcSendBtn"><svg><use href="#icon-telegram"/></svg><span data-i18n="bc_send">ارسال به همه</span></button>
+                <span class="small muted" id="bcCount">0 / 3000</span>
+              </div>
+              <div class="setting-row" data-owner-only>
+                <div>
+                  <div class="title" data-i18n="bc_auto">خبر دادن خودکار وقتی لوکیشنی از کار افتاد</div>
+                  <div class="hint" data-i18n="bc_auto_hint">وقتی پایش سلامت یک لوکیشن را خراب تشخیص داد، به مشتری‌ها می‌گوید لینک اشتراکشان را یک بار به‌روزرسانی کنند. پنل از قبل این را می‌داند؛ تا حالا فقط به تو می‌گفت.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="settingBroadcastRoutes"><span class="track"><span class="thumb"></span></span></label>
+              </div>
+              <div id="bcLog" class="small muted"></div>
+            </div>
+          </div>
           <div class="col-6 win">
             <div class="win-head"><h3><svg><use href="#icon-telegram"/></svg><span data-i18n="notify_bot_title">ربات تلگرام</span></h3></div>
             <div class="win-body">

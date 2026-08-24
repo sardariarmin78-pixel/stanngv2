@@ -38,7 +38,7 @@ DB_PATH = os.path.join(DATA_DIR, "db.json")
 LOCK_PATH = os.path.join(DATA_DIR, "db.lock")
 RUNTIME_DIR = os.path.join(DATA_DIR, "rt")
 
-SCHEMA_VERSION = 19  # v19: xray-core data plane
+SCHEMA_VERSION = 20  # v20: broadcast log
 PBKDF2_ITERATIONS = 260_000
 
 # Drop lockout records this old — the table used to grow forever, one entry per
@@ -311,6 +311,10 @@ def normalize_db(db: Dict[str, Any]) -> bool:
 
     # Append-only record of what was sold, so revenue survives a plan edit
     # or the customer being deleted.
+    if not isinstance(db.get("broadcast_log"), list):
+        db["broadcast_log"] = []
+        changed = True
+
     if not isinstance(db.get("sales"), list):
         db["sales"] = []
         changed = True

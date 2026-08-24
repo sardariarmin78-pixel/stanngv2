@@ -74,6 +74,7 @@
     set('settingNotifyPercent', s.notify_quota_percent != null ? s.notify_quota_percent : 80);
     check('settingNotifyExpiry', s.notify_expiry_enabled !== false);
     check('settingRenewEnabled', !!s.userbot_renew_enabled);
+    check('settingBroadcastRoutes', !!s.broadcast_route_changes);
     check('settingVoucherRedeem', !!s.voucher_redeem_enabled);
     check('settingNotifyCustomer', !!s.notify_customer_enabled);
     check('settingShopEnabled', !!s.shop_enabled);
@@ -168,7 +169,7 @@
     if (name === 'endpoints') loadEndpoints();
     if (name === 'security' && isOwner) { loadTwofaStatus(); loadLoginLog(); }
     if (name === 'settings') { loadBackupStatus(); loadCleanupStatus(); loadDiagnostics(); }
-    if (name === 'notifications') loadRenewRequests(false);
+    if (name === 'notifications') { loadRenewRequests(false); loadBroadcast(); }
     if (name === 'notifications') loadUserbotStatus();
     closeSidebarMobile();
     PEYK.playSfx('open', 0.25);
@@ -937,6 +938,48 @@
     } finally { PEYK.setLoading(btn, false); }
   });
 
+
+  // ---------------- broadcast ----------------
+  /* Reaches only customers who bound their own subscription to the bot, so it
+     can never message someone who never opted in. */
+  async function loadBroadcast() {
+    try {
+      const r = await PEYK.api('/api/broadcast');
+      $('bcAudience').textContent = PEYK.t('bc_reach').replace('{n}', r.audience);
+      $('bcSendBtn').disabled = !r.bot_ready || !r.audience;
+
+      const log = $('bcLog');
+      if (!r.last.length) { log.textContent = ''; return; }
+      log.innerHTML = r.last.map(e => {
+        const when = PEYK.fmtAgo(e.at);
+        const what = e.auto ? PEYK.t('bc_auto_entry') : esc(e.preview);
+        return `<div>${esc(when)} — ${what} · <b class="mono">${esc(e.sent)}</b> ${esc(PEYK.t('bc_delivered'))}</div>`;
+      }).join('');
+    } catch (e) { /* non-fatal */ }
+  }
+
+  $('bcText').addEventListener('input', () => {
+    $('bcCount').textContent = `${$('bcText').value.length} / 3000`;
+  });
+
+  $('bcSendBtn').addEventListener('click', async () => {
+    const text = $('bcText').value.trim();
+    if (!text) { PEYK.toast(PEYK.t('bc_empty'), 'error'); return; }
+    // Unsendable once out, and it goes to paying customers, so it asks first.
+    if (!confirm(PEYK.t('bc_confirm').replace('{n}', $('bcAudience').textContent))) return;
+
+    const btn = $('bcSendBtn');
+    PEYK.setLoading(btn, true);
+    try {
+      const r = await PEYK.api('/api/broadcast', { method: 'POST', body: { text } });
+      PEYK.toast(PEYK.t('bc_done').replace('{n}', r.sent), 'success', 5000);
+      $('bcText').value = '';
+      $('bcCount').textContent = '0 / 3000';
+      loadBroadcast();
+    } catch (e) {
+      PEYK.toast(apiErrorText(e.detail), 'error');
+    } finally { PEYK.setLoading(btn, false); }
+  });
 
   // ---------------- sales + vouchers ----------------
   /* Grouped thousands, no decimals: these are Toman figures, and a fractional
@@ -2068,6 +2111,7 @@
     if (!days.length) { PEYK.toast(PEYK.t('rn_options_bad'), 'error'); return; }
     saveSettings('saveRenewBtn', {
       userbot_renew_enabled: $('settingRenewEnabled').checked,
+      broadcast_route_changes: $('settingBroadcastRoutes').checked,
       voucher_redeem_enabled: $('settingVoucherRedeem').checked,
       notify_customer_enabled: $('settingNotifyCustomer').checked,
       shop_enabled: $('settingShopEnabled').checked,
